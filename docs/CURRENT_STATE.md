@@ -1,0 +1,806 @@
+# GLoCA Repository Current State
+
+This document describes the repository as it exists now. It is a present-tense reference for code structure, supported experiment paths, output schemas, and the current experimental interpretation.
+
+## Research Frame
+
+The repository studies plant disease clustering with a frozen DINOv2 backbone and an optional GLoCA embedding adapter. The controlled comparison pattern is:
+
+```text
+DINO CLS + clustering method
+DINO + GLoCA + same clustering method
+```
+
+The intended controlled variables are dataset, seed, DINOv2 backbone, clustering method, evaluation code, and output schema. The intended difference in a matched comparison is the embedding source:
+
+```text
+normalized DINO CLS embedding
+GLoCA embedding
+```
+
+GLoCA is an embedding adapter, not a clustering method. Clustering methods consume the final embedding tensor produced by the shared model path.
+
+## Active Layout
+
+The active source tree is:
+
+```text
+src/
+  data/
+    datamodule.py
+    folder_dataset.py
+    registry.py
+    transforms.py
+
+  diagnostics/
+    gloca.py
+
+  evaluation/
+    assignment_schema.py
+    clustering_metrics.py
+
+  experiments/
+    config.py
+    outputs.py
+    registry.py
+
+  features/
+    dinov2.py
+    dinov2_backbone.py
+
+  models/
+    base.py
+    gloca.py
+
+    baselines/
+      dec_idec.py
+
+    clustering/
+      base.py
+      kmeans.py
+      propos.py
+      student_t.py
+
+  runners/
+    common.py
+    dec_idec.py
+    diagnostics.py
+    embedding_export.py
+    kmeans.py
+    propos.py
+    student_t.py
+
+  training/
+    dec_idec_trainer.py
+    propos_trainer.py
+
+  utils.py
+
+scripts/
+  prepare_plantseg_folder_dataset.py
+  run_baselines.py
+  run_propos.py
+  run_propos_gloca_diagnostics.py
+  visualize_gloca_attention.py
+```
+
+The supported script entry points are YAML-driven:
+
+```text
+python scripts/run_baselines.py <config_path>
+python scripts/run_propos.py <config_path>
+python scripts/run_propos_gloca_diagnostics.py <config_path>
+python scripts/visualize_gloca_attention.py --run-dir <run_dir> --dataset <name> --n-per-class <n>
+```
+
+`scripts/run_baselines.py`, `scripts/run_propos.py`, and `scripts/run_propos_gloca_diagnostics.py` each parse one positional YAML config path.
+
+## Configuration
+
+Config loading and validation live in `src/experiments/config.py`. The template file is:
+
+```text
+configs/templates/full_config_template.yaml
+```
+
+The present config sections are:
+
+```text
+experiment
+dataset
+backbone
+gloca
+head
+baseline
+propos
+prediction
+trainer
+base_config
+sweep
+diagnostics
+```
+
+The checked-in runnable configs are:
+
+```text
+configs/baselines/baselines_full.yaml
+configs/baselines/baselines_smoke.yaml
+configs/propos/propos_plantwild_cls_full_seed42.yaml
+configs/propos/propos_plantwild_cls_smoke.yaml
+configs/propos/propos_plantwild_gloca_gated_full_seed42.yaml
+configs/propos/propos_plantwild_gloca_gated_smoke.yaml
+configs/diagnostics/propos_gloca_diagnostics_plantwild_seed42.yaml
+```
+
+Runtime settings include `trainer.matmul_precision`, accepted values `highest`, `high`, `medium`, or null, and `trainer.num_workers` for dataloader throughput.
+
+## Dataset Layer
+
+The dataset abstraction is `FolderImageDataset` in `src/data/folder_dataset.py`.
+
+Expected folder layout:
+
+```text
+data/raw/<dataset_name>/
+  <class_name>/
+    image_001.jpg
+    image_002.png
+```
+
+Supported image extensions are:
+
+```text
+.jpg .jpeg .png .bmp .webp
+```
+
+Single-view samples expose:
+
+```python
+{
+    "index": int,
+    "image": Tensor,
+    "label": int,
+    "label_name": str,
+    "image_id": str,
+    "dataset": str,
+}
+```
+
+Two-view training samples expose:
+
+```python
+{
+    "views": (Tensor, Tensor),
+    "label": int,
+    "label_name": str,
+    "image_id": str,
+    "index": int,
+    "dataset": str,
+}
+```
+
+`ClusteringDataModule` is a plain PyTorch dataloader helper. It supports `single_view` and `contrastive_two_view` training modes. When `training_views: auto`, it resolves to one view for `single_view` and two views for `contrastive_two_view`.
+
+Training transforms use PIL/torchvision:
+
+```text
+RandomResizedCrop
+RandomHorizontalFlip
+ColorJitter
+RandomGrayscale
+ToTensor
+ImageNet normalization
+```
+
+Prediction/export transforms are deterministic:
+
+```text
+Resize(round(image_size * 256 / 224))
+CenterCrop(image_size)
+ToTensor
+ImageNet normalization
+```
+
+The dataset registry names and default roots are:
+
+```text
+plantseg      -> data/raw/plantseg_folder
+plantvillage  -> data/raw/plantvillage
+plantwild     -> data/raw/plantwild_v2
+```
+
+`DatasetSpec` also supports `root`, `limit_per_class`, and `include_classes`.
+
+## Backbone
+
+The feature backbone is DINOv2. The supported variant set contains:
+
+```text
+facebook/dinov2-small
+```
+
+`DINOv2Backbone` in `src/features/dinov2_backbone.py`:
+
+- loads with HuggingFace `AutoModel.from_pretrained`,
+- freezes parameters when `freeze: true`,
+- keeps the underlying model in eval mode,
+- runs the model under `torch.no_grad()`,
+- extracts CLS from `last_hidden_state[:, 0, :]`,
+- extracts patch tokens from `last_hidden_state[:, 1:, :]`,
+- returns `cls`, `patch_tokens`, and `patch_grid`.
+
+At `image_size: 224` with DINOv2-S/14, the expected geometry is:
+
+```text
+CLS:          [B, 384]
+Patch tokens: [B, 256, 384]
+Patch grid:   (16, 16)
+```
+
+## GLoCA
+
+All GLoCA adapter code lives in `src/models/gloca.py`.
+
+Implemented adapter names:
+
+```text
+cls
+gloca_sum
+gloca_gated
+```
+
+Direct DINO CLS is represented in config by:
+
+```yaml
+gloca:
+  enabled: false
+  name: disabled
+```
+
+`build_adapter(config, input_dim)` returns `None` when GLoCA is disabled.
+
+All adapter forwards return:
+
+```python
+{
+    "embedding": Tensor,
+    "attention": Tensor | None,
+    "patch_grid": tuple[int, int] | None,
+}
+```
+
+`CLSAdapter` projects CLS through a residual MLP and optionally normalizes the output.
+
+`GLoCASumAdapter` computes simple attention over patch tokens, projects pooled patch information, adds it to the projected CLS vector, applies a residual MLP, and optionally normalizes the output.
+
+`GLoCAGatedAdapter` is the main conservative residual adapter:
+
+```text
+z_cls = W_cls(CLS)
+z_patch = W_patch(gated_attention_pool(patch_tokens))
+delta = MLP(concat(z_cls, z_patch))
+h = normalize(z_cls + alpha * delta)
+```
+
+`alpha` is a learnable scalar initialized from config, commonly `0.0`. Attention tensors use shape `[B, N]`. The adapter exposes a `diagnostics()` method that also returns `z_cls`, `z_patch`, and `delta`.
+
+Tests assert that `gloca_gated` with `alpha_init: 0.0` and matching input/output dimensions preserves normalized CLS closely at initialization, while `alpha` still receives gradients.
+
+## Shared Model Composition
+
+`ClusteringBaseModel` in `src/models/base.py` owns the shared composition:
+
+```text
+DINOv2 backbone -> optional GLoCA adapter -> final embedding -> clustering head
+```
+
+`encode_view(image)` is the shared embedding path. With no adapter, it returns normalized DINO CLS when `normalize_cls` is true. With an adapter, it returns the adapter output.
+
+`forward(image)` calls `encode_view()` and passes only `encoded["embedding"]` into the head.
+
+`forward_views((view1, view2))` applies the same shared path to both views.
+
+## Implemented Clustering and Baseline Methods
+
+### K-Means and Spherical K-Means
+
+Implementation files:
+
+```text
+src/models/clustering/kmeans.py
+src/runners/kmeans.py
+```
+
+The model layer provides:
+
+```text
+TorchKMeans
+TorchSphericalKMeans
+fit_kmeans
+torch_kmeans
+torch_spherical_kmeans
+```
+
+Supported initialization modes are:
+
+```text
+random
+kmeans++
+```
+
+`run_kmeans(config)` extracts deterministic embeddings with frozen DINOv2 and optional untrained GLoCA, then fits torch K-Means. When `baseline.spherical: true`, the effective output head is `spherical_kmeans`; otherwise it is `kmeans`.
+
+K-Means runs report `uses_cached_backbone_features: true`.
+
+### DEC and IDEC
+
+Implementation files:
+
+```text
+src/models/baselines/dec_idec.py
+src/training/dec_idec_trainer.py
+src/runners/dec_idec.py
+```
+
+`DINOCLSDECModel` is an autoencoder over cached deterministic DINO CLS embeddings. It includes:
+
+```text
+encoder
+decoder
+cluster_centers
+Student-t soft assignment
+target distribution computation
+```
+
+`run_dec_idec(config)` supports `head.name: dec` and `head.name: idec`. These runs require GLoCA disabled. The runner:
+
+- extracts deterministic DINO CLS embeddings,
+- pretrains the autoencoder,
+- initializes cluster centers with torch K-Means,
+- refines the DEC/IDEC objective,
+- writes a checkpoint.
+
+DEC refinement trains the encoder and cluster centers. IDEC refinement trains the encoder, decoder, and cluster centers with reconstruction loss.
+
+The target update parser treats null, empty, `"none"`, `"null"`, `"fixed"`, and `0` as fixed-target mode. A positive integer enables periodic target refresh.
+
+### StudentT
+
+Implementation files:
+
+```text
+src/models/clustering/student_t.py
+src/runners/student_t.py
+```
+
+`StudentTHead` is a diagnostic centroid head over an existing embedding. It uses Student-t soft assignment, a target distribution, and K-Means center initialization.
+
+`run_student_t(config)` exists as a runner and writes the standard run outputs plus `checkpoint.ckpt`. It supports direct CLS and optional GLoCA embeddings through the shared composition. The YAML baseline sweep dispatcher currently accepts `kmeans` and `dec_idec` runner names.
+
+### ProPos
+
+Implementation files:
+
+```text
+src/models/clustering/propos.py
+src/training/propos_trainer.py
+src/runners/propos.py
+scripts/run_propos.py
+```
+
+ProPos is the live-image, two-view trainable clustering method in this repository. It preserves the shared path:
+
+```text
+view -> frozen DINOv2 -> optional GLoCA -> embedding -> ProPos head
+```
+
+`ProPosHead` contains:
+
+```text
+projector
+target_projector
+predictor
+pseudo_labels buffer
+positive_sampling_alignment
+prototype_scattering_loss
+EMA target projector update
+```
+
+`ProPosTrainer`:
+
+- uses stochastic two-view training,
+- keeps DINOv2 frozen,
+- keeps a target encoder with an EMA copy of the optional adapter,
+- runs E-steps with spherical torch K-Means over deterministic target projections,
+- stores pseudo-labels by dataset index,
+- computes PSA and PSL losses,
+- applies warmup with PSL and latent noise inactive while `epoch <= warmup_epochs`,
+- supports symmetric loss,
+- supports AdamW only,
+- supports separate optimizer groups for projector, predictor, GLoCA parameters, and GLoCA alpha,
+- supports `freeze_gloca`, `freeze_gloca_epochs`, `gloca_lr_multiplier`, and `gloca_alpha_lr_multiplier`,
+- logs optional GLoCA diagnostics.
+
+After training, `run_propos(config)` exports deterministic single-view target projections, fits final spherical torch K-Means, computes metrics, writes `checkpoint.ckpt`, and writes standard output files.
+
+ProPos rows append method-specific metrics:
+
+```text
+loss_psa_final
+loss_psl_final
+loss_total_final
+kmeans_interval
+warmup_epochs
+lambda_psl
+sigma
+temperature
+ema_momentum
+ema_momentum_final
+projection_dim
+n_empty_cluster_batches
+n_invalid_psl_batches
+kmeans_backend
+kmeans_init
+```
+
+ProPos logs include E-step history, epoch history, recent step logs, target EMA status, GLoCA alpha values, GLoCA trainability, optional profiling totals, and the final K-Means logs.
+
+## ProPos/GLoCA Diagnostics
+
+The focused diagnostic script is:
+
+```text
+scripts/run_propos_gloca_diagnostics.py
+```
+
+The checked-in diagnostic config defines five runs on PlantWild seed 42:
+
+```text
+A: CLS
+B: frozen gloca_gated
+C: trainable gloca_gated with lower GLoCA body LR and alpha LR 1x
+D: trainable gloca_gated with lower GLoCA body LR and alpha LR 10x
+E: trainable gloca_gated with body LR 1x and alpha LR 10x
+```
+
+The script writes:
+
+```text
+propos_gloca_diagnostic_summary.csv
+propos_gloca_diagnostic_report.md
+```
+
+GLoCA scalar diagnostics live in `src/diagnostics/gloca.py`:
+
+```text
+gloca_alpha_value
+gloca_alpha_grad_norm
+gloca_param_grad_norm
+gloca_delta_norm_mean
+gloca_delta_norm_std
+gloca_embedding_cls_cosine_mean
+gloca_embedding_cls_cosine_std
+gloca_attention_entropy_mean
+gloca_attention_max_mean
+```
+
+## Attention Visualization
+
+`scripts/visualize_gloca_attention.py` visualizes saved GLoCA attention for runs with `attention.pt`.
+
+Inputs:
+
+```text
+--run-dir       directory containing attention.pt, assignments.json, and optionally config.yaml
+--dataset       plantseg, plantvillage, or plantwild
+--n-per-class   number of samples per class
+--output-dir    optional destination
+--seed          deterministic sample selection seed
+--alpha         overlay opacity
+--cmap          colormap
+```
+
+The script validates:
+
+- `attention.pt` exists,
+- `assignments.json` exists,
+- attention has shape `[B, N]`,
+- the run dataset matches `--dataset`,
+- `image_ids`, `labels`, and `assignments` have equal length,
+- attention columns match `patch_grid[0] * patch_grid[1]`.
+
+It maps attention through the repository's deterministic eval resize/center-crop geometry and overlays the heatmap on the original dataset image.
+
+## Baseline Sweep
+
+The baseline sweep entry point is:
+
+```text
+scripts/run_baselines.py
+```
+
+`configs/baselines/baselines_full.yaml` defines:
+
+```text
+datasets: plantvillage, plantwild, plantseg
+seeds: 42, 69, 67
+runs:
+  kmeans_cls
+  spherical_kmeans_cls
+  kmeans_gloca_gated_untrained
+  dec_cls
+  idec_cls
+```
+
+`configs/baselines/baselines_smoke.yaml` defines a PlantWild seed-42 smoke sweep with two K-Means runs and `limit_per_class: 2`.
+
+The baseline script writes:
+
+```text
+baseline_summary.csv
+baseline_summary_agg.csv
+```
+
+The aggregate grouping keys are:
+
+```text
+backbone
+gloca
+head
+dataset
+```
+
+## Output Contract
+
+Runner output directories use:
+
+```text
+<experiment.output_dir>/<experiment.name>/<head.name>/<dataset.name>/seed_<seed>/
+```
+
+Standard files:
+
+```text
+config.yaml
+assignments.json
+metrics.csv
+embeddings.pt
+logs.json
+```
+
+Conditional files:
+
+```text
+attention.pt       # written when attention exists
+checkpoint.ckpt    # written by trainable runners
+```
+
+Output writing is centralized in `src/experiments/outputs.py`. Assignment payloads are validated before writing.
+
+## Assignment Schema
+
+`src/evaluation/assignment_schema.py` defines required assignment fields:
+
+```text
+head
+backbone
+gloca
+dataset
+seed
+n_clusters
+image_ids
+labels
+assignments
+patch_grid
+```
+
+These arrays must have equal length:
+
+```text
+image_ids
+labels
+assignments
+```
+
+## Metrics Schema
+
+Canonical per-run metric fields are:
+
+```text
+experiment
+head
+backbone
+dataset
+seed
+gloca
+n_clusters
+n_images
+ari
+nmi
+acc
+silhouette
+n_nonempty_clusters
+cluster_size_min
+cluster_size_max
+cluster_size_entropy
+embedding_variance_mean
+embedding_norm_mean
+embedding_norm_std
+attention_entropy
+attention_max
+attention_top5_mass
+attention_variance
+backbone_cache_time_s
+head_train_time_s
+total_time_s
+inference_time_s
+peak_gpu_mb
+uses_cached_backbone_features
+```
+
+DEC/IDEC append:
+
+```text
+input_dim
+hidden_dims
+latent_dim
+pretrain_epochs
+refine_epochs
+pretrain_lr
+refine_lr
+lambda_recon
+alpha
+target_update_mode
+target_update_interval
+```
+
+ProPos appends:
+
+```text
+loss_psa_final
+loss_psl_final
+loss_total_final
+kmeans_interval
+warmup_epochs
+lambda_psl
+sigma
+temperature
+ema_momentum
+ema_momentum_final
+projection_dim
+n_empty_cluster_batches
+n_invalid_psl_batches
+kmeans_backend
+kmeans_init
+```
+
+Canonical aggregate fields are:
+
+```text
+backbone
+gloca
+head
+dataset
+n_runs
+seeds
+ari_mean
+ari_std
+nmi_mean
+nmi_std
+acc_mean
+acc_std
+silhouette_mean
+silhouette_std
+total_time_s_mean
+total_time_s_std
+peak_gpu_mb
+```
+
+Clustering metrics use:
+
+```text
+ARI: sklearn adjusted_rand_score
+NMI: sklearn normalized_mutual_info_score
+ACC: Hungarian-aligned clustering accuracy
+Silhouette: sklearn silhouette_score with sample_size <= 2000
+```
+
+Diagnostics include cluster occupancy, normalized cluster-size entropy, embedding variance/norm statistics, and attention entropy/max/top-5 mass/variance when attention exists.
+
+## Current Recorded ProPos Findings
+
+`docs/report_1.md` records the current PlantWild 200-epoch ProPos analysis for these seed-42 runs:
+
+```text
+outputs/propos_full/propos_cls_full_200ep/propos/plantwild/seed_42
+outputs/propos_full/propos_gloca_gated_full_200ep/propos/plantwild/seed_42
+```
+
+The two runs share dataset, seed, backbone, head family, evaluation code, and output schema. Their ProPos schedules differ in `kmeans_interval`: CLS uses `1`, and GLoCA-gated uses `2`.
+
+Final metrics:
+
+| Run | GLoCA | ARI | NMI | ACC | Silhouette | Final total loss | Final PSA | Final PSL |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| ProPos CLS, 200 ep | disabled | 0.326506 | 0.666694 | 0.400853 | 0.114619 | -1.523476 | -1.764363 | 2.408874 |
+| ProPos GLoCA-gated, 200 ep | gloca_gated | 0.326628 | 0.654514 | 0.417653 | 0.132384 | -1.580791 | -1.823843 | 2.430524 |
+
+Best observed epoch-history values:
+
+| Run | Best ARI epoch | Best ARI | Best ACC epoch | Best ACC | Best NMI epoch | Best NMI |
+|---|---:|---:|---:|---:|---:|---:|
+| ProPos CLS | 58 | 0.350289 | 70 | 0.433670 | 155 | 0.674839 |
+| ProPos GLoCA-gated | 66 | 0.352669 | 118 | 0.443332 | 66 | 0.674425 |
+
+GLoCA learning diagnostics from the 200-epoch GLoCA run include:
+
+```text
+alpha: 0.0 initialization to -8.4046
+embedding-to-CLS cosine: about 0.537 near the end of training
+training attention entropy: about 4.82 near the end of training diagnostics
+final metrics attention_entropy: 4.868949
+final metrics attention_max: 0.039434
+final metrics attention_top5_mass: 0.150596
+```
+
+The current interpretation is:
+
+- ProPos is a working implemented method in this repository.
+- `GLoCA-gated + ProPos` is stable under the recorded PlantWild run.
+- GLoCA changes the embedding substantially under ProPos.
+- GLoCA improves ProPos total loss and PSA loss in the recorded run.
+- The learned patch correction is not clearly better aligned with disease-label clustering than the CLS path.
+- The bottleneck shown by these runs is objective alignment, not absence of GLoCA learning.
+
+The report also records qualitative attention-map findings. GLoCA attention sometimes overlaps visible disease evidence and sometimes emphasizes background, borders, artifacts, non-lesion object regions, or other visual factors. Attention localization and final cluster alignment are related diagnostics, but they are not equivalent: disease-localizing attention can still produce fragmented clusters, and cohesive clusters can appear without lesion-centered attention.
+
+The report records a preprocessing observation as well: full-frame-preserving resize-pad and resize-stretch trials do not improve the observed ProPos-CLS trajectory over the current crop/resize pipeline in the noted preliminary runs.
+
+## Tests
+
+The test suite is configured in `pyproject.toml`:
+
+```toml
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+```
+
+Current tests cover:
+
+- folder dataset and datamodule behavior,
+- DEC/IDEC target update parsing and tiny cached training,
+- conservative GLoCA initialization,
+- GLoCA alpha gradients,
+- direct CLS behavior with no adapter,
+- GLoCA diagnostics scalar outputs,
+- attention visualization helpers,
+- ProPos projection/predictor shapes,
+- ProPos PSA and PSL behavior,
+- ProPos EMA target updates,
+- frozen DINOv2 behavior in the clustering model,
+- target adapter EMA updates,
+- ProPos optimizer parameter groups,
+- GLoCA freeze controls,
+- ProPos pseudo-label lookup by dataset index,
+- torch K-Means and spherical K-Means behavior,
+- ProPos import structure,
+- assignment array length validation,
+- runtime matmul precision settings,
+- experiment script config-path parsing,
+- config template section coverage.
+
+## Present Policy Summary
+
+- The main comparison pattern is same dataset, same seed, same backbone, same clustering method, and CLS versus GLoCA embedding.
+- DINOv2 is frozen in the implemented runners.
+- The shared embedding path is `ClusteringBaseModel.encode_view()`.
+- Clustering methods consume the final embedding tensor only.
+- K-Means and spherical K-Means are deterministic cached-embedding baselines.
+- DEC and IDEC are standalone DINO CLS autoencoder baselines.
+- StudentT is a diagnostic centroid head available in code.
+- ProPos is the live two-view trainable clustering method.
+- GLoCA variants live in `src/models/gloca.py`.
+- Output writing lives in `src/experiments/outputs.py`.
+- Assignment and metrics schemas live in `src/evaluation/assignment_schema.py`.
+- Long histories, training details, diagnostics, and method notes live in `logs.json`.

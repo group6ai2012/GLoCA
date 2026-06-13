@@ -1,0 +1,156 @@
+experiment:
+  output_dir: outputs/diagnostics/propos_gloca_diagnostics
+
+base_config:
+  experiment:
+    name: propos_diag_base
+    seed: 42
+    output_dir: outputs/diagnostics/propos_gloca_diagnostics
+
+  dataset:
+    name: plantwild
+    limit_per_class:
+    include_classes:
+    training_views: auto
+
+  backbone:
+    family: dinov2
+    variant: facebook/dinov2-small
+    freeze: true
+    image_size: 224
+
+  head:
+    name: propos
+    n_clusters: auto
+    training_mode: contrastive_two_view
+
+  gloca:
+    enabled: false
+    name: disabled
+    embedding_dim: 384
+    normalize_output: true
+
+  propos:
+    embedding_dim: 384
+    projection_dim: 256
+    projection_hidden_dim: 512
+    predictor_hidden_dim: 512
+    temperature: 0.5
+    sigma: 0.001
+    lambda_psl: 0.1
+    ema_momentum: 0.996
+    ema_momentum_max: 1.0
+    ema_momentum_increase: true
+    kmeans_interval: 1
+    kmeans_init: kmeans++
+    kmeans_n_init: 10
+    kmeans_max_iter: 300
+    kmeans_tol: 1.0e-4
+    warmup_epochs: 2
+    predictor_lr_multiplier: 10.0
+    weight_decay: 1.0e-4
+    optimizer: adamw
+    symmetric_loss: true
+    profile_batches: false
+    gloca_lr_multiplier: 1.0
+    gloca_alpha_lr_multiplier: 1.0
+    freeze_gloca: false
+    freeze_gloca_epochs: 0
+    log_gloca_diagnostics: true
+
+  prediction:
+    deterministic: true
+    export_embeddings: true
+    export_attention: true
+
+  trainer:
+    max_epochs: 10
+    batch_size: 128
+    lr: 5.0e-4
+    accelerator: auto
+    precision: 32
+    matmul_precision: high
+    num_workers: 4
+
+diagnostics:
+  force: false
+  runs:
+    - id: A
+      name: propos_diag_A_cls
+      config:
+        experiment:
+          name: propos_diag_A_cls
+        gloca:
+          enabled: false
+          name: disabled
+        propos:
+          freeze_gloca: false
+          freeze_gloca_epochs: 0
+
+    - id: B
+      name: propos_diag_B_gloca_frozen
+      config:
+        experiment:
+          name: propos_diag_B_gloca_frozen
+        gloca:
+          enabled: true
+          name: gloca_gated
+          embedding_dim: 384
+          alpha_init: 0.0
+          normalize_output: true
+        propos:
+          freeze_gloca: true
+          freeze_gloca_epochs: 0
+          gloca_lr_multiplier: 0.1
+          gloca_alpha_lr_multiplier: 1.0
+
+    - id: C
+      name: propos_diag_C_gloca_lr01_alpha1
+      config:
+        experiment:
+          name: propos_diag_C_gloca_lr01_alpha1
+        gloca:
+          enabled: true
+          name: gloca_gated
+          embedding_dim: 384
+          alpha_init: 0.0
+          normalize_output: true
+        propos:
+          freeze_gloca: false
+          freeze_gloca_epochs: 0
+          gloca_lr_multiplier: 0.1
+          gloca_alpha_lr_multiplier: 1.0
+
+    - id: D
+      name: propos_diag_D_gloca_lr01_alpha10
+      config:
+        experiment:
+          name: propos_diag_D_gloca_lr01_alpha10
+        gloca:
+          enabled: true
+          name: gloca_gated
+          embedding_dim: 384
+          alpha_init: 0.0
+          normalize_output: true
+        propos:
+          freeze_gloca: false
+          freeze_gloca_epochs: 0
+          gloca_lr_multiplier: 0.1
+          gloca_alpha_lr_multiplier: 10.0
+
+    - id: E
+      name: propos_diag_E_gloca_lr1_alpha10
+      config:
+        experiment:
+          name: propos_diag_E_gloca_lr1_alpha10
+        gloca:
+          enabled: true
+          name: gloca_gated
+          embedding_dim: 384
+          alpha_init: 0.0
+          normalize_output: true
+        propos:
+          freeze_gloca: false
+          freeze_gloca_epochs: 0
+          gloca_lr_multiplier: 1.0
+          gloca_alpha_lr_multiplier: 10.0

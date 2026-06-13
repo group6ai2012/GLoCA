@@ -1,0 +1,3 @@
+DINOV2_SMALL = "facebook/dinov2-small"
+DINOV2_VARIANTS = {DINOV2_SMALL}
+

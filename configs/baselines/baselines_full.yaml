@@ -1,0 +1,169 @@
+experiment:
+  output_dir: outputs/baselines_full
+
+base_config:
+  dataset:
+    training_views: auto
+    limit_per_class:
+    include_classes:
+
+  backbone:
+    family: dinov2
+    variant: facebook/dinov2-small
+    freeze: true
+    image_size: 224
+
+  gloca:
+    enabled: false
+    name: disabled
+    embedding_dim: 384
+    normalize_output: true
+
+  head:
+    n_clusters: auto
+
+  prediction:
+    deterministic: true
+    export_embeddings: true
+    export_attention: true
+
+  trainer:
+    max_epochs: 20
+    batch_size: 128
+    lr: 1.0e-4
+    accelerator: auto
+    precision: 32
+    matmul_precision: high
+    num_workers: 4
+
+sweep:
+  datasets: [plantvillage, plantwild, plantseg]
+  seeds: [42, 69, 67]
+  skip_existing: true
+  fail_fast: false
+  runs:
+    - name: kmeans_cls
+      runner: kmeans
+      expected:
+        head: kmeans
+        gloca: disabled
+      config:
+        experiment:
+          name: kmeans_cls
+        head:
+          name: kmeans
+          training_mode: single_view
+        gloca:
+          enabled: false
+          name: disabled
+        baseline:
+          spherical: false
+          kmeans_init: kmeans++
+          kmeans_n_init: 20
+          kmeans_max_iter: 300
+          kmeans_tol: 1.0e-4
+
+    - name: spherical_kmeans_cls
+      runner: kmeans
+      expected:
+        head: spherical_kmeans
+        gloca: disabled
+      config:
+        experiment:
+          name: spherical_kmeans_cls
+        head:
+          name: kmeans
+          training_mode: single_view
+        gloca:
+          enabled: false
+          name: disabled
+        baseline:
+          spherical: true
+          kmeans_init: kmeans++
+          kmeans_n_init: 20
+          kmeans_max_iter: 300
+          kmeans_tol: 1.0e-4
+
+    - name: kmeans_gloca_gated_untrained
+      runner: kmeans
+      expected:
+        head: spherical_kmeans
+        gloca: gloca_gated
+      config:
+        experiment:
+          name: kmeans_gloca_gated_untrained
+        head:
+          name: kmeans
+          training_mode: single_view
+        gloca:
+          enabled: true
+          name: gloca_gated
+          embedding_dim: 384
+          alpha_init: 0.0
+          normalize_output: true
+        baseline:
+          spherical: true
+          kmeans_init: kmeans++
+          kmeans_n_init: 20
+          kmeans_max_iter: 300
+          kmeans_tol: 1.0e-4
+
+    - name: dec_cls
+      runner: dec_idec
+      expected:
+        head: dec
+        gloca: disabled
+      config:
+        experiment:
+          name: dec_cls
+        head:
+          name: dec
+          training_mode: cached_dino_cls
+        gloca:
+          enabled: false
+          name: disabled
+        baseline:
+          kmeans_init: kmeans++
+          kmeans_n_init: 20
+          kmeans_max_iter: 300
+          kmeans_tol: 1.0e-4
+          input_dim: 384
+          hidden_dims: [512, 512, 2048]
+          latent_dim: 64
+          pretrain_epochs: 20
+          refine_epochs: 10
+          pretrain_lr: 1.0e-3
+          refine_lr: 1.0e-4
+          lambda_recon: 0.0
+          alpha: 1.0
+          target_update_interval:
+
+    - name: idec_cls
+      runner: dec_idec
+      expected:
+        head: idec
+        gloca: disabled
+      config:
+        experiment:
+          name: idec_cls
+        head:
+          name: idec
+          training_mode: cached_dino_cls
+        gloca:
+          enabled: false
+          name: disabled
+        baseline:
+          kmeans_init: kmeans++
+          kmeans_n_init: 20
+          kmeans_max_iter: 300
+          kmeans_tol: 1.0e-4
+          input_dim: 384
+          hidden_dims: [512, 512, 2048]
+          latent_dim: 64
+          pretrain_epochs: 20
+          refine_epochs: 10
+          pretrain_lr: 1.0e-3
+          refine_lr: 1.0e-4
+          lambda_recon: 0.1
+          alpha: 1.0
+          target_update_interval:

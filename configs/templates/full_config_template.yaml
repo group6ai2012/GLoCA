@@ -1,0 +1,139 @@
+# Used by sweep/diagnostic scripts for report roots; single-run scripts use experiment directly.
+experiment:
+  name:
+  seed:
+  output_dir:
+
+# Used by all dataset-backed runners.
+dataset:
+  name:
+  root:
+  limit_per_class:
+  include_classes:
+  training_views:
+
+# Used by all runners.
+backbone:
+  family:
+  variant:
+  freeze:
+  image_size:
+
+# Used by optional GLoCA embedding paths.
+gloca:
+  enabled:
+  name:
+  embedding_dim:
+  normalize_output:
+  alpha_init:
+  attention_hidden_dim:
+  mlp_hidden_dim:
+
+# Used by all clustering runners.
+head:
+  name:
+  n_clusters:
+  training_mode:
+
+# Used by K-Means, DEC, and IDEC baseline runners.
+baseline:
+  spherical:
+  kmeans_init:
+  kmeans_n_init:
+  kmeans_max_iter:
+  kmeans_tol:
+  input_dim:
+  hidden_dims:
+  latent_dim:
+  pretrain_epochs:
+  refine_epochs:
+  pretrain_lr:
+  refine_lr:
+  lambda_recon:
+  alpha:
+  target_update_interval:
+
+# Used by ProPos runner and ProPos diagnostics.
+propos:
+  embedding_dim:
+  projection_dim:
+  projection_hidden_dim:
+  predictor_hidden_dim:
+  temperature:
+  sigma:
+  lambda_psl:
+  ema_momentum:
+  ema_momentum_max:
+  ema_momentum_increase:
+  kmeans_interval:
+  kmeans_init:
+  kmeans_n_init:
+  kmeans_max_iter:
+  kmeans_tol:
+  warmup_epochs:
+  predictor_lr_multiplier:
+  weight_decay:
+  optimizer:
+  symmetric_loss:
+  profile_batches:
+  gloca_lr_multiplier:
+  gloca_alpha_lr_multiplier:
+  freeze_gloca:
+  freeze_gloca_epochs:
+  log_gloca_diagnostics:
+
+# Used by output/export logic.
+prediction:
+  deterministic:
+  export_embeddings:
+  export_attention:
+
+# Used by dataloaders/training.
+trainer:
+  max_epochs:
+  batch_size:
+  lr:
+  accelerator:
+  precision:
+  matmul_precision:
+  num_workers:
+
+# Used only by scripts/run_baselines.py.
+base_config:
+  dataset:
+    training_views:
+  backbone:
+    family:
+    variant:
+    freeze:
+    image_size:
+  gloca:
+    enabled:
+    name:
+    embedding_dim:
+    normalize_output:
+  head:
+    n_clusters:
+  prediction:
+    deterministic:
+    export_embeddings:
+    export_attention:
+  trainer:
+    max_epochs:
+    batch_size:
+    lr:
+    precision:
+    matmul_precision:
+    num_workers:
+
+sweep:
+  datasets:
+  seeds:
+  skip_existing:
+  fail_fast:
+  runs:
+
+# Used only by scripts/run_propos_gloca_diagnostics.py.
+diagnostics:
+  force:
+  runs:

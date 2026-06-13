@@ -1,0 +1,79 @@
+experiment:
+  output_dir: outputs/baselines_smoke
+
+base_config:
+  dataset:
+    training_views: auto
+    limit_per_class: 2
+    include_classes:
+  backbone:
+    family: dinov2
+    variant: facebook/dinov2-small
+    freeze: true
+    image_size: 224
+  gloca:
+    enabled: false
+    name: disabled
+    embedding_dim: 384
+    normalize_output: true
+  head:
+    n_clusters: auto
+  prediction:
+    deterministic: true
+    export_embeddings: true
+    export_attention: true
+  trainer:
+    max_epochs: 1
+    batch_size: 16
+    lr: 1.0e-4
+    accelerator: auto
+    precision: 32
+    matmul_precision: high
+    num_workers: 0
+
+sweep:
+  datasets: [plantwild]
+  seeds: [42]
+  skip_existing: false
+  fail_fast: true
+  runs:
+    - name: kmeans_cls
+      runner: kmeans
+      expected:
+        head: kmeans
+        gloca: disabled
+      config:
+        experiment:
+          name: kmeans_cls
+        head:
+          name: kmeans
+          training_mode: single_view
+        gloca:
+          enabled: false
+          name: disabled
+        baseline:
+          spherical: false
+          kmeans_init: kmeans++
+          kmeans_n_init: 2
+          kmeans_max_iter: 25
+          kmeans_tol: 1.0e-4
+    - name: spherical_kmeans_cls
+      runner: kmeans
+      expected:
+        head: spherical_kmeans
+        gloca: disabled
+      config:
+        experiment:
+          name: spherical_kmeans_cls
+        head:
+          name: kmeans
+          training_mode: single_view
+        gloca:
+          enabled: false
+          name: disabled
+        baseline:
+          spherical: true
+          kmeans_init: kmeans++
+          kmeans_n_init: 2
+          kmeans_max_iter: 25
+          kmeans_tol: 1.0e-4
