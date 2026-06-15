@@ -57,12 +57,14 @@ src/
 
     clustering/
       base.py
+      cdc.py
       kmeans.py
       propos.py
       student_t.py
 
   runners/
     common.py
+    cdc.py
     dec_idec.py
     diagnostics.py
     embedding_export.py
@@ -71,6 +73,8 @@ src/
     student_t.py
 
   training/
+    checkpointing.py
+    cdc_trainer.py
     dec_idec_trainer.py
     propos_trainer.py
 
@@ -79,6 +83,7 @@ src/
 scripts/
   prepare_plantseg_folder_dataset.py
   run_baselines.py
+  run_cdc.py
   run_propos.py
   run_propos_gloca_diagnostics.py
   visualize_gloca_attention.py
@@ -88,12 +93,13 @@ The supported script entry points are YAML-driven:
 
 ```text
 python scripts/run_baselines.py <config_path>
+python scripts/run_cdc.py <config_path>
 python scripts/run_propos.py <config_path>
 python scripts/run_propos_gloca_diagnostics.py <config_path>
 python scripts/visualize_gloca_attention.py --run-dir <run_dir> --dataset <name> --n-per-class <n>
 ```
 
-`scripts/run_baselines.py`, `scripts/run_propos.py`, and `scripts/run_propos_gloca_diagnostics.py` each parse one positional YAML config path.
+`scripts/run_baselines.py`, `scripts/run_cdc.py`, `scripts/run_propos.py`, and `scripts/run_propos_gloca_diagnostics.py` each parse one positional YAML config path.
 
 ## Configuration
 
@@ -113,6 +119,7 @@ gloca
 head
 baseline
 propos
+cdc
 prediction
 trainer
 base_config
@@ -130,9 +137,24 @@ configs/propos/propos_plantwild_cls_smoke.yaml
 configs/propos/propos_plantwild_gloca_gated_full_seed42.yaml
 configs/propos/propos_plantwild_gloca_gated_smoke.yaml
 configs/diagnostics/propos_gloca_diagnostics_plantwild_seed42.yaml
+configs/cdc/cdc_plantwild_cls_smoke.yaml
+configs/cdc/cdc_plantwild_gloca_gated_smoke.yaml
+configs/cdc/cdc_plantwild_cls_seed42.yaml
+configs/cdc/cdc_plantwild_gloca_gated_seed42.yaml
 ```
 
-Runtime settings include `trainer.matmul_precision`, accepted values `highest`, `high`, `medium`, or null, and `trainer.num_workers` for dataloader throughput.
+Runtime settings include `trainer.matmul_precision`, accepted values `highest`, `high`, `medium`, or null, and `trainer.num_workers` for dataloader throughput. Trainable runners also support resumable checkpointing fields:
+
+```yaml
+trainer:
+  checkpoint_interval: 10
+  eval_interval: checkpoint
+  resume_from_checkpoint: auto
+  keep_last_n_checkpoints: 3
+  profile_resources: true
+```
+
+`resume_from_checkpoint: auto` resumes from `<run_dir>/checkpoints/latest.ckpt` when it exists. `null` starts fresh, and an explicit path loads that checkpoint. `eval_interval: checkpoint` runs expensive trainer-level evaluation at checkpoint epochs and the final epoch; final runner export/evaluation still always runs.
 
 ## Dataset Layer
 
@@ -180,6 +202,31 @@ Two-view training samples expose:
 ```
 
 `ClusteringDataModule` is a plain PyTorch dataloader helper. It supports `single_view` and `contrastive_two_view` training modes. When `training_views: auto`, it resolves to one view for `single_view` and two views for `contrastive_two_view`.
+
+CDC uses an opt-in `cdc` training mode with:
+
+```yaml
+dataset:
+  training_views: cdc_weak_strong_calibration
+```
+
+CDC training samples expose:
+
+```python
+{
+    "weak": Tensor,
+    "strong": Tensor,
+    "calibration": Tensor,
+    "views": (weak, strong),
+    "label": int,
+    "label_name": str,
+    "image_id": str,
+    "index": int,
+    "dataset": str,
+}
+```
+
+The weak view uses the current training crop/resize pipeline. The strong view uses the CDC reference RandAugment-like operator list plus optional Cutout. The calibration view uses deterministic prediction preprocessing. This view mode is only active when requested by CDC configs and does not change ProPos two-view behavior.
 
 Training transforms use PIL/torchvision:
 
@@ -355,10 +402,12 @@ target distribution computation
 `run_dec_idec(config)` supports `head.name: dec` and `head.name: idec`. These runs require GLoCA disabled. The runner:
 
 - extracts deterministic DINO CLS embeddings,
-- pretrains the autoencoder,
-- initializes cluster centers with torch K-Means,
-- refines the DEC/IDEC objective,
+- pretrains the autoencoder through the phase-aware trainer,
+- initializes cluster centers with torch K-Means when needed,
+- refines the DEC/IDEC objective through the phase-aware trainer,
 - writes a checkpoint.
+
+DEC/IDEC resumable checkpoints are phase-aware and can resume from `pretrain`, `cluster_init`, `refine`, or `complete` states without repeating completed phases.
 
 DEC refinement trains the encoder and cluster centers. IDEC refinement trains the encoder, decoder, and cluster centers with reconstruction loss.
 
@@ -419,7 +468,8 @@ EMA target projector update
 - supports AdamW only,
 - supports separate optimizer groups for projector, predictor, GLoCA parameters, and GLoCA alpha,
 - supports `freeze_gloca`, `freeze_gloca_epochs`, `gloca_lr_multiplier`, and `gloca_alpha_lr_multiplier`,
-- logs optional GLoCA diagnostics.
+- saves resumable checkpoints under `checkpoints/`,
+- logs optional GLoCA diagnostics and separated resource timing totals.
 
 After training, `run_propos(config)` exports deterministic single-view target projections, fits final spherical torch K-Means, computes metrics, writes `checkpoint.ckpt`, and writes standard output files.
 
@@ -443,7 +493,104 @@ kmeans_backend
 kmeans_init
 ```
 
-ProPos logs include E-step history, epoch history, recent step logs, target EMA status, GLoCA alpha values, GLoCA trainability, optional profiling totals, and the final K-Means logs.
+ProPos logs include E-step history, epoch history, recent step logs, target EMA status, GLoCA alpha values, GLoCA trainability, resource timing totals, checkpoint/eval schedule fields, and the final K-Means logs. The E-step schedule is unchanged by `eval_interval`.
+
+### CDC
+
+Implementation files:
+
+```text
+src/models/clustering/cdc.py
+src/training/cdc_trainer.py
+src/runners/cdc.py
+scripts/run_cdc.py
+```
+
+CDC is implemented as a live-image trainable clustering method over the shared embedding path:
+
+```text
+weak / strong / calibration view -> frozen DINOv2 -> optional GLoCA -> embedding -> CDC heads
+```
+
+`CDCHead` contains a clustering head and a calibration head. Both are:
+
+```text
+Linear(input_dim, hidden_dim) -> BatchNorm1d -> ReLU -> Linear(hidden_dim, n_clusters)
+```
+
+The default hidden dimension in the provided CDC configs is `512`, and the input dimension is not hard-coded. Forward outputs include clustering logits, calibration logits, probabilities, predictions, and confidence tensors.
+
+`CDCTrainer`:
+
+- treats `trainer.batch_size` as the physical dataloader batch size and `cdc.meta_batch_size` as the virtual CDC statistical batch size,
+- accumulates physical batches into `CDCMetaBatch` objects before reliable sample selection and calibration target construction,
+- uses the weak view for no-gradient calibration-head confidence and reliable pseudo-label selection over the whole meta-batch,
+- stores physical-dataloader strong tensors on CPU inside the virtual meta-batch,
+- uses the stored strong view for clustering-head cross-entropy on selected reliable samples, optimized in `cdc.sub_batch_size` chunks,
+- uses the calibration view for detached mini-cluster target construction over the whole meta-batch and calibration-head loss in chunks,
+- supports `cdc.meta_batch_drop_last` for dropping or processing a final partial meta-batch,
+- keeps calibration loss gradients out of DINOv2, GLoCA, and the clustering head,
+- keeps DINOv2 frozen,
+- supports optimizer groups for CDC clustering head, CDC calibration head, optional GLoCA body parameters, and optional GLoCA alpha parameters,
+- saves resumable checkpoints under `checkpoints/`,
+- logs losses, configured and actual meta-batch sizes, selected sample counts, reliable sample ratio, confidence stats, pseudo-label entropy, skipped meta-batch/chunk counts, CDC initialization mode, checkpoint/eval schedule fields, separated resource timing totals, and optional GLoCA diagnostics.
+- uses tqdm for live batch and epoch progress, and reports deterministic calibration-head NMI, ARI, and ACC only when `trainer.eval_interval` schedules trainer-level evaluation.
+
+The provided CDC PlantWild configs use this virtual-batch pattern:
+
+```yaml
+trainer:
+  batch_size: 128
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
+cdc:
+  meta_batch_size: 2048
+  sub_batch_size: 128
+  per_class_selected_num: auto
+  calibration_k: 160
+  meta_batch_drop_last: false
+```
+
+With `per_class_selected_num: auto`, reliable selection is computed from the actual meta-batch size. For PlantWild-115, a full 2048-sample meta-batch selects up to `2048 // 115 = 17` samples per predicted class. Small smoke subsets can produce a smaller final partial meta-batch, so their selected-per-class count can be lower.
+
+CDC initialization attempts the reference-style deterministic embedding prototype initialization with local torch K-Means:
+
+```text
+embeddings -> row z-score/normalize -> K-Means(hidden_dim) for W1
+hidden activations -> row z-score/normalize -> K-Means(n_clusters) for W2
+```
+
+The original CDC `orth_train` stage is exposed as configuration metadata but is not run in this local first pass. If the prototype path is not feasible, for example because a smoke subset has fewer samples than `hidden_dim`, CDC keeps random initialization and writes `cdc_init_mode: random` plus a fallback reason to `logs.json`.
+
+Final CDC prediction uses the calibration head by default, matching the CDC-Cal interpretation. The runner writes the standard canonical files plus `checkpoint.ckpt`, `confidence.pt`, `calibrated_confidence.pt`, and `pseudo_labels.pt`. GLoCA runs also write `attention.pt`.
+
+CDC appends method-specific metrics:
+
+```text
+clustering_confidence_mean
+clustering_confidence_std
+calibrated_confidence_mean
+calibrated_confidence_std
+reliable_sample_ratio
+calibration_threshold
+calibration_ece
+calibration_mce
+pseudo_label_count
+pseudo_label_entropy
+cdc_pretrain_epochs
+cdc_refine_epochs
+cdc_init_mode
+```
+
+Checked smoke commands:
+
+```text
+python scripts/run_cdc.py configs/cdc/cdc_plantwild_cls_smoke.yaml
+python scripts/run_cdc.py configs/cdc/cdc_plantwild_gloca_gated_smoke.yaml
+```
+
+Both checked smoke runs complete end-to-end and write canonical outputs. In the smoke subset, prototype initialization falls back to random because `n_samples=230` is smaller than `hidden_dim=512`. The one-epoch smoke runs produce finite confidence tensors and non-collapsed assignment IDs, but they are not research-result runs.
 
 ## ProPos/GLoCA Diagnostics
 
@@ -573,7 +720,21 @@ Conditional files:
 ```text
 attention.pt       # written when attention exists
 checkpoint.ckpt    # written by trainable runners
+confidence.pt      # written by CDC
+calibrated_confidence.pt  # written by CDC
+pseudo_labels.pt   # written by CDC
 ```
+
+Trainable runners additionally write periodic resumable checkpoints:
+
+```text
+checkpoints/
+  epoch_0010.ckpt
+  epoch_0020.ckpt
+  latest.ckpt
+```
+
+`latest.ckpt` is a real copied file for Windows compatibility, not a symlink. The final `checkpoint.ckpt` artifact remains separate and unchanged for canonical output compatibility.
 
 Output writing is centralized in `src/experiments/outputs.py`. Assignment payloads are validated before writing.
 
@@ -672,6 +833,24 @@ n_empty_cluster_batches
 n_invalid_psl_batches
 kmeans_backend
 kmeans_init
+```
+
+CDC appends:
+
+```text
+clustering_confidence_mean
+clustering_confidence_std
+calibrated_confidence_mean
+calibrated_confidence_std
+reliable_sample_ratio
+calibration_threshold
+calibration_ece
+calibration_mce
+pseudo_label_count
+pseudo_label_entropy
+cdc_pretrain_epochs
+cdc_refine_epochs
+cdc_init_mode
 ```
 
 Canonical aggregate fields are:
@@ -785,6 +964,8 @@ Current tests cover:
 - ProPos pseudo-label lookup by dataset index,
 - torch K-Means and spherical K-Means behavior,
 - ProPos import structure,
+- CDC head outputs, reliable-sample edge cases, calibration stop-gradient behavior, initialization fallback logs, CDC named dataloader views, CDC trainer view consumption, CDC optimizer freezing behavior, and CDC script parsing,
+- resumable checkpoint helpers, checkpoint-gated evaluation scheduling, and CDC/ProPos/DEC-IDEC resume behavior,
 - assignment array length validation,
 - runtime matmul precision settings,
 - experiment script config-path parsing,

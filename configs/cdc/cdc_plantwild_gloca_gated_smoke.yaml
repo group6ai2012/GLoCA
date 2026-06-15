@@ -1,12 +1,12 @@
 experiment:
-  name: propos_gloca_gated_smoke
+  name: cdc_gloca_gated_smoke
   seed: 42
-  output_dir: outputs/propos_smoke
+  output_dir: outputs/cdc_smoke
 dataset:
   name: plantwild
   limit_per_class: 2
   include_classes:
-  training_views: auto
+  training_views: cdc_weak_strong_calibration
 backbone:
   family: dinov2
   variant: facebook/dinov2-small
@@ -19,44 +19,52 @@ gloca:
   alpha_init: 0.0
   normalize_output: true
 head:
-  name: propos
+  name: cdc
   n_clusters: auto
-  training_mode: contrastive_two_view
-propos:
+  training_mode: cdc
+cdc:
   embedding_dim: 384
-  projection_dim: 256
-  projection_hidden_dim: 512
-  predictor_hidden_dim: 512
-  temperature: 0.5
-  sigma: 0.001
-  lambda_psl: 0.1
-  ema_momentum: 0.996
-  ema_momentum_max: 1.0
-  ema_momentum_increase: true
-  kmeans_interval: 1
+  hidden_dim: 512
+  training_views: cdc_weak_strong_calibration
+  meta_batch_size: 2048
+  sub_batch_size: 128
+  per_class_selected_num: auto
+  calibration_k: 160
+  meta_batch_drop_last: false
+  w_en: 1.0
+  prototype_init: true
+  orthogonalize_init: false
   kmeans_init: kmeans++
   kmeans_n_init: 2
   kmeans_max_iter: 25
   kmeans_tol: 1.0e-4
-  warmup_epochs: 0
-  predictor_lr_multiplier: 10.0
-  weight_decay: 1.0e-4
+  weight_decay: 0.0
   optimizer: adamw
-  symmetric_loss: true
-  profile_batches: false
   gloca_lr_multiplier: 0.1
   gloca_alpha_lr_multiplier: 1.0
   freeze_gloca: false
   freeze_gloca_epochs: 0
   log_gloca_diagnostics: true
+  progress: true
+  augment:
+    weak:
+      name: current_train
+    strong:
+      name: randaugment_cutout
+      randaugment_n: 4
+      cutout_enabled: true
+      cutout_n_holes: 1
+      cutout_length: 56
+    calibration:
+      name: deterministic_prediction
 prediction:
   deterministic: true
   export_embeddings: true
   export_attention: true
 trainer:
   max_epochs: 1
-  batch_size: 8
-  lr: 5.0e-4
+  batch_size: 128
+  lr: 1.0e-4
   accelerator: auto
   precision: 32
   matmul_precision: high

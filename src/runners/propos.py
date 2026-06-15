@@ -16,10 +16,11 @@ from src.models.clustering import ProPosHead, fit_kmeans
 from src.runners.common import (
     apply_runtime_settings,
     assert_backbone_frozen,
-    get_peak_gpu_mb,
+    finalize_run,
     prepare_runner_context,
 )
 from src.runners.diagnostics import attention_diagnostics, cluster_diagnostics, embedding_diagnostics
+from src.training.checkpointing import resolve_resume_checkpoint
 from src.training.propos_trainer import ProPosTrainer
 from src.utils import ExperimentResult, resolve_gloca_name
 
@@ -99,11 +100,18 @@ def run_propos(config: dict[str, Any]) -> ExperimentResult:
         head=head,
         normalize_cls=bool(config["gloca"].get("normalize_output", True)),
     )
+    checkpoint_dir = output_dir / "checkpoints"
+    resume_path = resolve_resume_checkpoint(
+        config.get("trainer", {}).get("resume_from_checkpoint", "auto"),
+        checkpoint_dir,
+    )
     propos_trainer = ProPosTrainer(
         model=model,
         datamodule=datamodule,
         config=config,
         device=device,
+        checkpoint_dir=checkpoint_dir,
+        resume_from_checkpoint=resume_path,
     )
 
     train_start = time.perf_counter()
@@ -126,52 +134,8 @@ def run_propos(config: dict[str, Any]) -> ExperimentResult:
     )
     inference_time_s = time.perf_counter() - infer_start
     assignments = final_kmeans["assignments"]
-    assignments_np = assignments.numpy()
 
-    metrics = compute_clustering_metrics(
-        extracted["labels"].numpy(),
-        assignments_np,
-        extracted["embeddings"].numpy(),
-    )
-    cluster_stats = cluster_diagnostics(assignments_np, int(config["head"]["n_clusters"]))
-    embedding_stats = embedding_diagnostics(extracted["embeddings"])
-    attention_stats = attention_diagnostics(extracted["attention"])
-    peak_gpu_mb = get_peak_gpu_mb()
-
-    assignments_payload = {
-        "head": "propos",
-        "backbone": config["backbone"]["variant"],
-        "gloca": gloca_name,
-        "dataset": spec.name,
-        "seed": seed,
-        "n_clusters": int(config["head"]["n_clusters"]),
-        "image_ids": extracted["image_ids"],
-        "labels": extracted["labels"].tolist(),
-        "assignments": assignments.tolist(),
-        "patch_grid": list(extracted["patch_grid"]),
-    }
-    metrics_row = {
-        "experiment": config["experiment"]["name"],
-        "head": "propos",
-        "backbone": config["backbone"]["variant"],
-        "dataset": spec.name,
-        "seed": seed,
-        "gloca": gloca_name,
-        "n_clusters": int(config["head"]["n_clusters"]),
-        "n_images": int(extracted["embeddings"].shape[0]),
-        "ari": metrics["ari"],
-        "nmi": metrics["nmi"],
-        "acc": metrics["acc"],
-        "silhouette": metrics["silhouette"],
-        **cluster_stats,
-        **embedding_stats,
-        **attention_stats,
-        "backbone_cache_time_s": 0.0,
-        "head_train_time_s": head_train_time_s,
-        "total_time_s": head_train_time_s + inference_time_s,
-        "inference_time_s": inference_time_s,
-        "peak_gpu_mb": peak_gpu_mb,
-        "uses_cached_backbone_features": False,
+    metrics_extras = {
         "loss_psa_final": propos_trainer.loss_psa_final,
         "loss_psl_final": propos_trainer.loss_psl_final,
         "loss_total_final": propos_trainer.loss_total_final,
@@ -190,7 +154,7 @@ def run_propos(config: dict[str, Any]) -> ExperimentResult:
         "_extra_fields": PROPOS_EXTRA_METRICS,
     }
     trainer_logs = propos_trainer.training_logs()
-    logs = {
+    logs_extras = {
         "uses_cached_backbone_features": False,
         "live_two_view_training": True,
         "deterministic_single_view_prediction": True,
@@ -223,17 +187,29 @@ def run_propos(config: dict[str, Any]) -> ExperimentResult:
         "head_train_time_s": head_train_time_s,
         "inference_time_s": inference_time_s,
         **runtime_logs,
-        **cluster_stats,
-        **embedding_stats,
-        **attention_stats,
     }
-    write_outputs(
+    return finalize_run(
         output_dir=output_dir,
         config=config,
-        assignments_payload=assignments_payload,
-        metrics_row=metrics_row,
+        spec=spec,
+        head="propos",
+        image_ids=extracted["image_ids"],
+        labels=extracted["labels"],
+        assignments=assignments,
         embeddings=extracted["embeddings"],
         attention=extracted["attention"],
-        logs=logs,
+        patch_grid=extracted["patch_grid"],
+        seed=seed,
+        backbone_cache_time_s=0.0,
+        head_train_time_s=head_train_time_s,
+        total_time_s=head_train_time_s + inference_time_s,
+        inference_time_s=inference_time_s,
+        uses_cached_backbone_features=False,
+        metrics_extras=metrics_extras,
+        logs_extras=logs_extras,
+        metrics_fn=compute_clustering_metrics,
+        cluster_diagnostics_fn=cluster_diagnostics,
+        embedding_diagnostics_fn=embedding_diagnostics,
+        attention_diagnostics_fn=attention_diagnostics,
+        writer=write_outputs,
     )
-    return ExperimentResult(output_dir=str(output_dir), metrics=metrics_row)

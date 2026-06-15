@@ -1,4 +1,5 @@
 from src.models.clustering.base import ClusteringHead
+from src.models.clustering.cdc import CDCHead
 from src.models.clustering.kmeans import (
     TorchKMeans,
     TorchSphericalKMeans,
@@ -10,6 +11,7 @@ from src.models.clustering.propos import ProPosHead
 from src.models.clustering.student_t import StudentTHead
 
 __all__ = [
+    "CDCHead",
     "ClusteringHead",
     "ProPosHead",
     "StudentTHead",

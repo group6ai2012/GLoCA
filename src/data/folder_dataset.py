@@ -44,11 +44,14 @@ class FolderImageDataset(Dataset):
     def __init__(
         self,
         spec: DatasetSpec,
-        transform: Callable | None = None,
-        training_views: int = 1,
+        transform: Callable | dict[str, Callable] | None = None,
+        training_views: int | str = 1,
     ) -> None:
-        if training_views not in {1, 2}:
-            raise ValueError(f"training_views must be 1 or 2, got {training_views}")
+        if training_views not in {1, 2, "cdc_weak_strong_calibration"}:
+            raise ValueError(
+                "training_views must be 1, 2, or 'cdc_weak_strong_calibration', "
+                f"got {training_views}"
+            )
         self.spec = spec
         self.transform = transform
         self.training_views = training_views
@@ -98,15 +101,31 @@ class FolderImageDataset(Dataset):
         record = self.records[index]
         with Image.open(record.path) as image:
             image = image.convert("RGB")
-            if self.training_views == 2:
+            if self.training_views == "cdc_weak_strong_calibration":
+                if not isinstance(self.transform, dict):
+                    raise TypeError("CDC training views require a transform dictionary.")
+                weak = self.transform["weak"](image)
+                calibration = self.transform["calibration"](image)
+                strong = self.transform["strong"](image)
+                payload = {
+                    "weak": weak,
+                    "strong": strong,
+                    "calibration": calibration,
+                    "views": (weak, strong),
+                }
+            elif self.training_views == 2:
                 if self.transform is None:
                     view1 = image.copy()
                     view2 = image.copy()
                 else:
+                    if isinstance(self.transform, dict):
+                        raise TypeError("Two-view training expects a single transform callable.")
                     view1 = self.transform(image)
                     view2 = self.transform(image)
                 payload = {"views": (view1, view2)}
             else:
+                if isinstance(self.transform, dict):
+                    raise TypeError("Single-view training expects a single transform callable.")
                 payload = {"image": self.transform(image) if self.transform is not None else image.copy()}
 
         payload.update(

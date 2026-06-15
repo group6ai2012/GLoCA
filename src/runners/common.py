@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -9,7 +10,10 @@ from pathlib import Path
 from src.data import FolderImageDataset, get_dataset_spec
 from src.data.folder_dataset import DatasetSpec
 from src.data.transforms import build_eval_transform
-from src.utils import resolve_device, resolve_gloca_name, resolve_output_dir, seed_everything
+from src.evaluation import compute_clustering_metrics
+from src.experiments.outputs import write_outputs
+from src.runners.diagnostics import attention_diagnostics, cluster_diagnostics, embedding_diagnostics
+from src.utils import ExperimentResult, resolve_device, resolve_gloca_name, resolve_output_dir, seed_everything
 
 
 @dataclass
@@ -106,3 +110,110 @@ def build_assignment_payload(
         "assignments": assignments.tolist(),
         "patch_grid": list(patch_grid),
     }
+
+
+def finalize_run(
+    *,
+    output_dir: Path,
+    config: dict[str, Any],
+    spec: DatasetSpec,
+    head: str,
+    image_ids: list[str],
+    labels: torch.Tensor,
+    assignments: torch.Tensor,
+    embeddings: torch.Tensor,
+    attention: torch.Tensor | None,
+    patch_grid: tuple[int, int] | list[int],
+    seed: int,
+    backbone_cache_time_s: float,
+    head_train_time_s: float,
+    total_time_s: float,
+    inference_time_s: float,
+    uses_cached_backbone_features: bool,
+    metrics_extras: dict[str, Any] | None = None,
+    logs_extras: dict[str, Any] | None = None,
+    assignment_extras: dict[str, Any] | None = None,
+    metrics_fn: Callable[[Any, Any, Any], dict[str, float]] = compute_clustering_metrics,
+    cluster_diagnostics_fn: Callable[[Any, int], dict[str, Any]] = cluster_diagnostics,
+    embedding_diagnostics_fn: Callable[[torch.Tensor], dict[str, Any]] = embedding_diagnostics,
+    attention_diagnostics_fn: Callable[[torch.Tensor | None], dict[str, Any]] = attention_diagnostics,
+    writer: Callable[..., None] = write_outputs,
+) -> ExperimentResult:
+    assignments_np = assignments.detach().cpu().numpy()
+    embeddings_cpu = embeddings.detach().cpu().float()
+    labels_cpu = labels.detach().cpu().long()
+    n_clusters = int(config["head"]["n_clusters"])
+
+    metrics = metrics_fn(labels_cpu.numpy(), assignments_np, embeddings_cpu.numpy())
+    cluster_stats = cluster_diagnostics_fn(assignments_np, n_clusters)
+    embedding_stats = embedding_diagnostics_fn(embeddings_cpu)
+    attention_stats = attention_diagnostics_fn(attention)
+    peak_gpu_mb = get_peak_gpu_mb()
+
+    assignments_payload = build_assignment_payload(
+        config=config,
+        spec=spec,
+        head=head,
+        image_ids=image_ids,
+        labels=labels_cpu,
+        assignments=assignments.detach().cpu().long(),
+        patch_grid=patch_grid,
+    )
+    if assignment_extras:
+        assignments_payload.update(assignment_extras)
+
+    metrics_row = {
+        "experiment": config["experiment"]["name"],
+        "head": head,
+        "backbone": config["backbone"]["variant"],
+        "dataset": spec.name,
+        "seed": int(seed),
+        "gloca": resolve_gloca_name(config),
+        "n_clusters": n_clusters,
+        "n_images": int(embeddings_cpu.shape[0]),
+        "ari": metrics["ari"],
+        "nmi": metrics["nmi"],
+        "acc": metrics["acc"],
+        "silhouette": metrics["silhouette"],
+        **cluster_stats,
+        **embedding_stats,
+        **attention_stats,
+        "backbone_cache_time_s": float(backbone_cache_time_s),
+        "head_train_time_s": float(head_train_time_s),
+        "total_time_s": float(total_time_s),
+        "inference_time_s": float(inference_time_s),
+        "peak_gpu_mb": peak_gpu_mb,
+        "uses_cached_backbone_features": bool(uses_cached_backbone_features),
+    }
+    if metrics_extras:
+        metrics_row.update(metrics_extras)
+
+    logs = {
+        "uses_cached_backbone_features": bool(uses_cached_backbone_features),
+        "head": head,
+        "backbone": config["backbone"]["variant"],
+        "gloca": resolve_gloca_name(config),
+        "embedding_shape": list(embeddings_cpu.shape),
+        "attention_shape": None if attention is None else list(attention.shape),
+        "num_workers": int(config["trainer"]["num_workers"]),
+        "backbone_cache_time_s": float(backbone_cache_time_s),
+        "head_train_time_s": float(head_train_time_s),
+        "total_time_s": float(total_time_s),
+        "inference_time_s": float(inference_time_s),
+        **cluster_stats,
+        **embedding_stats,
+        **attention_stats,
+    }
+    if logs_extras:
+        logs.update(logs_extras)
+
+    writer(
+        output_dir=output_dir,
+        config=config,
+        assignments_payload=assignments_payload,
+        metrics_row=metrics_row,
+        embeddings=embeddings_cpu,
+        attention=attention,
+        logs=logs,
+    )
+    return ExperimentResult(output_dir=str(output_dir), metrics=metrics_row)

@@ -169,16 +169,14 @@ class GLoCAGatedAdapter(nn.Module):
         patch_tokens: torch.Tensor,
         patch_grid: tuple[int, int] | None = None,
     ) -> dict[str, torch.Tensor | tuple[int, int] | None]:
-        z_cls = self.cls_proj(cls)
-        pooled, attention = self.patch_pool(patch_tokens)
-        z_patch = self.patch_proj(pooled)
-        delta = self.fusion_mlp(torch.cat([z_cls, z_patch], dim=-1))
-        embedding = z_cls + self.alpha * delta
-        if self.normalize_output:
-            embedding = F.normalize(embedding, dim=-1)
-        return {"embedding": embedding, "attention": attention, "patch_grid": patch_grid}
+        computed = self._compute(cls=cls, patch_tokens=patch_tokens, patch_grid=patch_grid)
+        return {
+            "embedding": computed["embedding"],
+            "attention": computed["attention"],
+            "patch_grid": computed["patch_grid"],
+        }
 
-    def diagnostics(
+    def _compute(
         self,
         cls: torch.Tensor,
         patch_tokens: torch.Tensor,
@@ -199,6 +197,14 @@ class GLoCAGatedAdapter(nn.Module):
             "z_patch": z_patch,
             "delta": delta,
         }
+
+    def diagnostics(
+        self,
+        cls: torch.Tensor,
+        patch_tokens: torch.Tensor,
+        patch_grid: tuple[int, int] | None = None,
+    ) -> dict[str, torch.Tensor | tuple[int, int] | None]:
+        return self._compute(cls=cls, patch_tokens=patch_tokens, patch_grid=patch_grid)
 
 
 ADAPTERS = {

@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import math
 import time
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -12,9 +13,30 @@ from torch import nn
 from tqdm.auto import tqdm
 
 from src.data import ClusteringDataModule
-from src.diagnostics import collect_gloca_diagnostics
 from src.evaluation.clustering_metrics import clustering_accuracy
 from src.models.clustering.kmeans import fit_kmeans
+from src.training.checkpointing import (
+    atomic_torch_save,
+    capture_rng_state,
+    copy_as_latest,
+    empty_resource_totals,
+    prune_old_epoch_checkpoints,
+    restore_rng_state,
+    should_run_eval,
+    should_save_epoch_checkpoint,
+    timed_section,
+    update_resource_totals,
+)
+from src.training.gloca_utils import (
+    assert_backbone_frozen,
+    compute_gloca_diagnostics,
+    current_gloca_alpha,
+    desired_gloca_trainable,
+    gloca_alpha_parameters,
+    gloca_optimizer_groups,
+    set_gloca_trainable,
+    split_gloca_parameters,
+)
 
 
 class ProPosTargetEncoder(nn.Module):
@@ -45,6 +67,8 @@ class ProPosTrainer:
         datamodule: ClusteringDataModule,
         config: dict[str, Any],
         device: torch.device,
+        checkpoint_dir: Path | None = None,
+        resume_from_checkpoint: Path | None = None,
     ) -> None:
         self.model = model.to(device)
         self.datamodule = datamodule
@@ -84,15 +108,30 @@ class ProPosTrainer:
             "loss_time_s": 0.0,
             "backward_time_s": 0.0,
         }
+        trainer_config = config.get("trainer", {})
+        self.checkpoint_dir = None if checkpoint_dir is None else Path(checkpoint_dir)
+        self.checkpoint_interval = int(trainer_config.get("checkpoint_interval", 0))
+        self.eval_interval = trainer_config.get("eval_interval", "checkpoint")
+        self.keep_last_n_checkpoints = int(
+            trainer_config.get("keep_last_n_checkpoints", 3)
+        )
+        self.profile_resources = bool(trainer_config.get("profile_resources", True))
+        self.start_epoch = 0
+        self.resource_totals = empty_resource_totals()
         self.global_step = 0
         self.total_steps = 1
         self.set_gloca_trainable(self._desired_gloca_trainable(epoch=0))
         self.optimizer = self._build_optimizer()
+        if resume_from_checkpoint is not None:
+            self.load_resumable_checkpoint(Path(resume_from_checkpoint))
 
     def fit(self) -> None:
         self.assert_backbone_frozen()
-        self.model.head.update_target_projector(momentum=0.0)
-        self.update_target_adapter(momentum=0.0)
+        if self.start_epoch == 0:
+            self.model.head.update_target_projector(momentum=0.0)
+            self.update_target_adapter(momentum=0.0)
+        else:
+            tqdm.write(f"Resuming ProPos from epoch {self.start_epoch}")
 
         train_loader = self.datamodule.train_dataloader()
         max_epochs = int(self.config["trainer"]["max_epochs"])
@@ -101,16 +140,45 @@ class ProPosTrainer:
         if kmeans_interval <= 0:
             raise ValueError(f"propos.kmeans_interval must be positive, got {kmeans_interval}")
 
-        for epoch in range(max_epochs):
+        if self.start_epoch >= max_epochs:
+            tqdm.write("ProPos checkpoint already reached max_epochs; skipping training.")
+            return
+
+        for epoch in range(self.start_epoch, max_epochs):
+            wall_start = time.perf_counter()
+            epoch_timing: dict[str, float] = {}
             self.maybe_update_gloca_freeze_state(epoch)
             if epoch % kmeans_interval == 0:
                 self.run_estep(epoch)
-            epoch_logs = self.train_epoch(epoch, train_loader, max_epochs=max_epochs)
+            with timed_section(epoch_timing, "train_epoch_time_s"):
+                epoch_logs = self.train_epoch(
+                    epoch, train_loader, max_epochs=max_epochs
+                )
+            should_checkpoint = should_save_epoch_checkpoint(
+                epoch, self.checkpoint_interval
+            )
+            run_eval = should_run_eval(
+                epoch=epoch,
+                max_epochs=max_epochs,
+                eval_interval=self.eval_interval,
+                checkpoint_interval=self.checkpoint_interval,
+            )
+            epoch_timing.setdefault("eval_time_s", 0.0)
+            epoch_timing.setdefault("checkpoint_save_time_s", 0.0)
             gloca_diagnostics = self.compute_gloca_diagnostics(epoch)
             if gloca_diagnostics is not None:
                 self.gloca_diagnostics_history.append(gloca_diagnostics)
                 epoch_logs["gloca_diagnostics"] = gloca_diagnostics
+            epoch_logs.update(epoch_timing)
+            epoch_logs["evaluated"] = bool(run_eval)
+            epoch_logs["checkpoint_saved"] = bool(should_checkpoint)
             self.epoch_history.append(epoch_logs)
+            if should_checkpoint:
+                with timed_section(epoch_timing, "checkpoint_save_time_s"):
+                    self.save_epoch_checkpoint(epoch)
+            epoch_timing["epoch_total_wall_time_s"] = time.perf_counter() - wall_start
+            epoch_logs.update(epoch_timing)
+            update_resource_totals(self.resource_totals, epoch_timing)
             tqdm.write(
                 "Epoch "
                 f"{epoch + 1}/{max_epochs} "
@@ -119,6 +187,80 @@ class ProPosTrainer:
                 f"ari={epoch_logs['ari']:.4f} "
                 f"acc={epoch_logs['acc']:.4f}"
             )
+
+    def resumable_checkpoint_payload(self, epoch: int) -> dict[str, Any]:
+        return {
+            "checkpoint_version": 1,
+            "method": "propos",
+            "epoch": int(epoch),
+            "next_epoch": int(epoch) + 1,
+            "global_step": int(self.global_step),
+            "total_steps": int(self.total_steps),
+            "model_state_dict": self.model.state_dict(),
+            "target_encoder_state_dict": self.target_encoder.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "config": self.config,
+            "estep_history": self.estep_history,
+            "step_history_tail": self.step_history[-20:],
+            "epoch_history": self.epoch_history,
+            "profile_totals": self.profile_totals,
+            "resource_totals": self.resource_totals,
+            "gloca_diagnostics_history": self.gloca_diagnostics_history,
+            "loss_psa_final": self.loss_psa_final,
+            "loss_psl_final": self.loss_psl_final,
+            "loss_total_final": self.loss_total_final,
+            "ema_momentum_final": self.ema_momentum_final,
+            "n_empty_cluster_batches": self.n_empty_cluster_batches,
+            "n_invalid_psl_batches": self.n_invalid_psl_batches,
+            "gloca_trainable": self.gloca_trainable,
+            "checkpoint_interval": self.checkpoint_interval,
+            "eval_interval": self.eval_interval,
+            "rng_state": capture_rng_state(),
+        }
+
+    def load_resumable_checkpoint(self, path: Path) -> None:
+        ckpt = torch.load(path, map_location=self.device, weights_only=False)
+        if ckpt.get("method") != "propos":
+            raise ValueError(f"Expected ProPos checkpoint, got {ckpt.get('method')!r}")
+        self.model.load_state_dict(ckpt["model_state_dict"])
+        self.target_encoder.load_state_dict(ckpt["target_encoder_state_dict"])
+        self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        self.global_step = int(ckpt.get("global_step", 0))
+        self.total_steps = int(ckpt.get("total_steps", 1))
+        self.estep_history = list(ckpt.get("estep_history", []))
+        self.step_history = list(ckpt.get("step_history_tail", []))
+        self.epoch_history = list(ckpt.get("epoch_history", []))
+        self.profile_totals = {**self.profile_totals, **dict(ckpt.get("profile_totals", {}))}
+        self.resource_totals = {
+            **empty_resource_totals(),
+            **dict(ckpt.get("resource_totals", {})),
+        }
+        self.gloca_diagnostics_history = list(
+            ckpt.get("gloca_diagnostics_history", [])
+        )
+        self.loss_psa_final = float(ckpt.get("loss_psa_final", float("nan")))
+        self.loss_psl_final = float(ckpt.get("loss_psl_final", float("nan")))
+        self.loss_total_final = float(ckpt.get("loss_total_final", float("nan")))
+        self.ema_momentum_final = float(
+            ckpt.get("ema_momentum_final", self.ema_momentum_final)
+        )
+        self.n_empty_cluster_batches = int(ckpt.get("n_empty_cluster_batches", 0))
+        self.n_invalid_psl_batches = int(ckpt.get("n_invalid_psl_batches", 0))
+        self.set_gloca_trainable(bool(ckpt.get("gloca_trainable", self.gloca_trainable)))
+        restore_rng_state(ckpt.get("rng_state"))
+        self.start_epoch = int(ckpt.get("next_epoch", int(ckpt["epoch"]) + 1))
+
+    def save_epoch_checkpoint(self, epoch: int) -> None:
+        if self.checkpoint_dir is None:
+            return
+        payload = self.resumable_checkpoint_payload(epoch)
+        epoch_path = self.checkpoint_dir / f"epoch_{epoch + 1:04d}.ckpt"
+        latest_path = self.checkpoint_dir / "latest.ckpt"
+        atomic_torch_save(payload, epoch_path)
+        copy_as_latest(epoch_path, latest_path)
+        prune_old_epoch_checkpoints(
+            self.checkpoint_dir, keep_last_n=self.keep_last_n_checkpoints
+        )
 
     def run_estep(self, epoch: int) -> None:
         self.model.eval()
@@ -410,9 +552,7 @@ class ProPosTrainer:
         return int(epoch) <= int(self.propos_config["warmup_epochs"])
 
     def assert_backbone_frozen(self) -> None:
-        trainable = [name for name, parameter in self.model.backbone.named_parameters() if parameter.requires_grad]
-        if trainable:
-            raise RuntimeError(f"DINOv2 backbone parameters require gradients: {trainable[:5]}")
+        assert_backbone_frozen(self.model.backbone)
 
     def checkpoint_payload(self) -> dict[str, Any]:
         return {
@@ -442,6 +582,11 @@ class ProPosTrainer:
             "global_step": self.global_step,
             "total_steps": self.total_steps,
             "profile_batches": self.profile_batches,
+            "resource_totals": self.resource_totals,
+            "eval_interval": self.eval_interval,
+            "checkpoint_interval": self.checkpoint_interval,
+            "keep_last_n_checkpoints": self.keep_last_n_checkpoints,
+            "profile_resources": self.profile_resources,
             "gloca_diagnostics_history": self.gloca_diagnostics_history,
             "gloca_alpha_initial": self.gloca_alpha_initial,
             "gloca_alpha_final": self._current_gloca_alpha(),
@@ -455,102 +600,48 @@ class ProPosTrainer:
         }
 
     def set_gloca_trainable(self, trainable: bool) -> None:
-        if self.model.adapter is None:
-            self.gloca_trainable = False
-            return
-        for parameter in self.model.adapter.parameters():
-            parameter.requires_grad = bool(trainable)
-        self.gloca_trainable = bool(trainable)
+        self.gloca_trainable = set_gloca_trainable(self.model.adapter, trainable)
 
     def maybe_update_gloca_freeze_state(self, epoch: int) -> None:
         self.set_gloca_trainable(self._desired_gloca_trainable(epoch))
 
     def _desired_gloca_trainable(self, epoch: int) -> bool:
-        if self.model.adapter is None:
-            return False
-        if self.freeze_gloca:
-            return False
-        if self.freeze_gloca_epochs > 0 and int(epoch) < self.freeze_gloca_epochs:
-            return False
-        return True
+        return desired_gloca_trainable(
+            self.model.adapter,
+            freeze_gloca=self.freeze_gloca,
+            freeze_gloca_epochs=self.freeze_gloca_epochs,
+            epoch=epoch,
+        )
 
     def _split_gloca_parameters(self) -> tuple[list[nn.Parameter], list[nn.Parameter]]:
-        if self.model.adapter is None:
-            return [], []
-        gloca_params: list[nn.Parameter] = []
-        alpha_params: list[nn.Parameter] = []
-        seen: set[int] = set()
-        for name, parameter in self.model.adapter.named_parameters():
-            parameter_id = id(parameter)
-            if parameter_id in seen:
-                continue
-            seen.add(parameter_id)
-            if "alpha" in name:
-                alpha_params.append(parameter)
-            else:
-                gloca_params.append(parameter)
-        return gloca_params, alpha_params
+        return split_gloca_parameters(self.model.adapter)
 
     def _gloca_alpha_parameters(self) -> list[nn.Parameter]:
-        return self._split_gloca_parameters()[1]
+        return gloca_alpha_parameters(self.model.adapter)
 
     def _current_gloca_alpha(self) -> float | None:
-        alpha_params = self._gloca_alpha_parameters()
-        if not alpha_params:
-            return None
-        if len(alpha_params) == 1 and alpha_params[0].numel() == 1:
-            return float(alpha_params[0].detach().cpu().item())
-        alpha_values = torch.cat([parameter.detach().flatten().cpu() for parameter in alpha_params])
-        return float(alpha_values.mean().item())
+        return current_gloca_alpha(self.model.adapter)
 
     def compute_gloca_diagnostics(self, epoch: int) -> dict[str, Any] | None:
         if self.model.adapter is None or not self.log_gloca_diagnostics:
             return None
+        return compute_gloca_diagnostics(
+            model=self.model,
+            datamodule=self.datamodule,
+            device=self.device,
+            epoch=epoch,
+            restore_training_fn=self._restore_after_gloca_diagnostics,
+        )
 
-        diagnostics: dict[str, Any] = {
-            "epoch": int(epoch),
-            "gloca_trainable": bool(any(parameter.requires_grad for parameter in self.model.adapter.parameters())),
-            "gloca_frozen": bool(not any(parameter.requires_grad for parameter in self.model.adapter.parameters())),
-        }
-
-        was_training = self.model.training
-        self.model.eval()
+    def _restore_after_gloca_diagnostics(self) -> None:
+        self.model.train()
         self.model.backbone.eval()
-        self.model.adapter.eval()
-        try:
-            batch = next(iter(self.datamodule.train_eval_dataloader()))
-            image = batch["image"].to(self.device)
-            with torch.no_grad():
-                backbone_out = self.model.backbone(image)
-                normalized_cls = F.normalize(backbone_out["cls"], dim=-1)
-                if hasattr(self.model.adapter, "diagnostics"):
-                    adapter_out = self.model.adapter.diagnostics(
-                        cls=backbone_out["cls"],
-                        patch_tokens=backbone_out["patch_tokens"],
-                        patch_grid=backbone_out["patch_grid"],
-                    )
-                else:
-                    adapter_out = self.model.adapter(
-                        cls=backbone_out["cls"],
-                        patch_tokens=backbone_out["patch_tokens"],
-                        patch_grid=backbone_out["patch_grid"],
-                    )
-                diagnostics.update(
-                    collect_gloca_diagnostics(self.model, {**adapter_out, "normalized_cls": normalized_cls})
-                )
-        finally:
-            if was_training:
-                self.model.train()
-                self.model.backbone.eval()
-                self.target_encoder.eval()
-                self.model.head.target_projector.eval()
-        return diagnostics
+        self.target_encoder.eval()
+        self.model.head.target_projector.eval()
 
     def _build_optimizer(self) -> torch.optim.Optimizer:
         base_lr = float(self.config["trainer"]["lr"])
         predictor_lr = base_lr * float(self.propos_config["predictor_lr_multiplier"])
-        gloca_lr = base_lr * self.gloca_lr_multiplier
-        gloca_alpha_lr = base_lr * self.gloca_alpha_lr_multiplier
         weight_decay = float(self.propos_config["weight_decay"])
         projector_params = list(self.model.head.projector.parameters())
         predictor_params = list(self.model.head.predictor.parameters())
@@ -559,25 +650,15 @@ class ProPosTrainer:
             {"params": predictor_params, "lr": predictor_lr, "weight_decay": weight_decay, "name": "predictor"},
         ]
         if self.model.adapter is not None and not self.freeze_gloca:
-            gloca_params, alpha_params = self._split_gloca_parameters()
-            if gloca_params:
-                param_groups.append(
-                    {
-                        "params": gloca_params,
-                        "lr": gloca_lr,
-                        "weight_decay": weight_decay,
-                        "name": "gloca",
-                    }
+            param_groups.extend(
+                gloca_optimizer_groups(
+                    self.model.adapter,
+                    base_lr=base_lr,
+                    weight_decay=weight_decay,
+                    gloca_lr_multiplier=self.gloca_lr_multiplier,
+                    gloca_alpha_lr_multiplier=self.gloca_alpha_lr_multiplier,
                 )
-            if alpha_params:
-                param_groups.append(
-                    {
-                        "params": alpha_params,
-                        "lr": gloca_alpha_lr,
-                        "weight_decay": 0.0,
-                        "name": "gloca_alpha",
-                    }
-                )
+            )
         optimizer_name = str(self.propos_config["optimizer"]).lower()
         if optimizer_name != "adamw":
             raise ValueError(f"Unsupported ProPos optimizer '{optimizer_name}'. Only 'adamw' is implemented.")

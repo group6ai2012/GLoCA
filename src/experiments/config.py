@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+import warnings
 
 import yaml
 
@@ -111,6 +112,66 @@ def validate_propos_config(config: dict[str, Any]) -> None:
         ],
         "propos",
     )
+
+
+def validate_cdc_config(config: dict[str, Any]) -> None:
+    validate_common_config(config)
+    require_keys(config, ["cdc"])
+    require_keys(
+        config["cdc"],
+        [
+            "embedding_dim",
+            "hidden_dim",
+            "training_views",
+            "meta_batch_size",
+            "sub_batch_size",
+            "per_class_selected_num",
+            "calibration_k",
+            "meta_batch_drop_last",
+            "w_en",
+            "prototype_init",
+            "orthogonalize_init",
+            "kmeans_init",
+            "kmeans_n_init",
+            "kmeans_max_iter",
+            "kmeans_tol",
+            "weight_decay",
+            "optimizer",
+            "gloca_lr_multiplier",
+            "gloca_alpha_lr_multiplier",
+            "freeze_gloca",
+            "freeze_gloca_epochs",
+            "log_gloca_diagnostics",
+            "augment",
+        ],
+        "cdc",
+    )
+    batch_size = int(config["trainer"]["batch_size"])
+    if batch_size <= 0:
+        raise ValueError(f"trainer.batch_size must be positive for CDC, got {batch_size}")
+    meta_batch_size = int(config["cdc"]["meta_batch_size"])
+    sub_batch_size = int(config["cdc"]["sub_batch_size"])
+    calibration_k = int(config["cdc"]["calibration_k"])
+    if meta_batch_size < batch_size:
+        raise ValueError(
+            f"cdc.meta_batch_size must be >= trainer.batch_size, got {meta_batch_size} < {batch_size}"
+        )
+    if sub_batch_size <= 0:
+        raise ValueError(f"cdc.sub_batch_size must be positive, got {sub_batch_size}")
+    if sub_batch_size > meta_batch_size:
+        raise ValueError(
+            f"cdc.sub_batch_size must be <= cdc.meta_batch_size, got {sub_batch_size} > {meta_batch_size}"
+        )
+    if calibration_k > meta_batch_size:
+        raise ValueError(
+            f"cdc.calibration_k must be <= cdc.meta_batch_size, got {calibration_k} > {meta_batch_size}"
+        )
+    raw_clusters = config["head"]["n_clusters"]
+    if raw_clusters != "auto" and meta_batch_size < int(raw_clusters):
+        warnings.warn(
+            "CDC meta_batch_size is smaller than head.n_clusters; reliable sample selection may be sparse.",
+            stacklevel=2,
+        )
 
 
 def validate_baseline_sweep_config(config: dict[str, Any]) -> None:

@@ -11,12 +11,13 @@ SUPPORTED_KMEANS_INITS = {"random", "kmeans++"}
 
 
 class TorchKMeans(nn.Module):
-    """Euclidean K-Means."""
+    """Torch K-Means, optionally using spherical/cosine updates."""
 
     def __init__(
         self,
         n_clusters: int,
         *,
+        spherical: bool = False,
         init: str = "kmeans++",
         n_init: int = 10,
         max_iter: int = 300,
@@ -26,6 +27,7 @@ class TorchKMeans(nn.Module):
     ) -> None:
         super().__init__()
         self.n_clusters = int(n_clusters)
+        self.spherical = bool(spherical)
         self.init = str(init)
         self.n_init = int(n_init)
         self.max_iter = int(max_iter)
@@ -38,7 +40,7 @@ class TorchKMeans(nn.Module):
         return fit_kmeans(
             features,
             self.n_clusters,
-            spherical=False,
+            spherical=self.spherical,
             init=self.init,
             n_init=self.n_init,
             max_iter=self.max_iter,
@@ -48,7 +50,7 @@ class TorchKMeans(nn.Module):
         )
 
 
-class TorchSphericalKMeans(nn.Module):
+class TorchSphericalKMeans(TorchKMeans):
     """Cosine/spherical K-Means."""
 
     def __init__(
@@ -62,27 +64,15 @@ class TorchSphericalKMeans(nn.Module):
         seed: int = 0,
         device: torch.device | None = None,
     ) -> None:
-        super().__init__()
-        self.n_clusters = int(n_clusters)
-        self.init = str(init)
-        self.n_init = int(n_init)
-        self.max_iter = int(max_iter)
-        self.tol = float(tol)
-        self.seed = int(seed)
-        self.device = device
-
-    @torch.no_grad()
-    def fit_predict(self, features: torch.Tensor) -> dict[str, Any]:
-        return fit_kmeans(
-            features,
-            self.n_clusters,
+        super().__init__(
+            n_clusters,
             spherical=True,
-            init=self.init,
-            n_init=self.n_init,
-            max_iter=self.max_iter,
-            tol=self.tol,
-            seed=self.seed,
-            device=self.device,
+            init=init,
+            n_init=n_init,
+            max_iter=max_iter,
+            tol=tol,
+            seed=seed,
+            device=device,
         )
 
 

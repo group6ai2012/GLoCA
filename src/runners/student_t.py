@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 import warnings
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -19,6 +20,18 @@ from src.models.clustering.kmeans import fit_kmeans
 from src.models.clustering import StudentTHead
 from src.runners.common import apply_runtime_settings
 from src.runners.diagnostics import attention_diagnostics, cluster_diagnostics, embedding_diagnostics
+from src.training.checkpointing import (
+    atomic_torch_save,
+    capture_rng_state,
+    copy_as_latest,
+    empty_resource_totals,
+    prune_old_epoch_checkpoints,
+    resolve_resume_checkpoint,
+    restore_rng_state,
+    should_save_epoch_checkpoint,
+    timed_section,
+    update_resource_totals,
+)
 from src.utils import ExperimentResult, resolve_device, resolve_gloca_name, resolve_output_dir, seed_everything
 
 
@@ -41,6 +54,11 @@ def run_student_t(config: dict[str, Any]) -> ExperimentResult:
     output_dir = resolve_output_dir(config)
     output_dir.mkdir(parents=True, exist_ok=True)
     save_experiment_config(config, output_dir / "config.yaml")
+    checkpoint_dir = output_dir / "checkpoints"
+    resume_path = resolve_resume_checkpoint(
+        config.get("trainer", {}).get("resume_from_checkpoint", "auto"),
+        checkpoint_dir,
+    )
 
     seed_everything(int(config["experiment"]["seed"]))
     datamodule = ClusteringDataModule(
@@ -86,8 +104,16 @@ def run_student_t(config: dict[str, Any]) -> ExperimentResult:
     backbone_cache_time_s = time.perf_counter() - cache_start
 
     head_train_start = time.perf_counter()
-    _initialize_student_t_centers(model, cache, device, seed=int(config["experiment"]["seed"]))
-    _train_student_t_from_cache(model, cache, config, device)
+    if resume_path is None:
+        _initialize_student_t_centers(model, cache, device, seed=int(config["experiment"]["seed"]))
+    student_t_training_logs = _train_student_t_from_cache(
+        model,
+        cache,
+        config,
+        device,
+        checkpoint_dir=checkpoint_dir,
+        resume_from_checkpoint=resume_path,
+    )
     head_train_time_s = time.perf_counter() - head_train_start
     total_train_time_s = time.perf_counter() - train_start
     torch.save({"state_dict": model.state_dict(), "config": config}, output_dir / "checkpoint.ckpt")
@@ -155,6 +181,7 @@ def run_student_t(config: dict[str, Any]) -> ExperimentResult:
         "embedding_shape": list(assembled["embeddings"].shape),
         "attention_shape": None if assembled["attention"] is None else list(assembled["attention"].shape),
         "num_workers": int(config["trainer"]["num_workers"]),
+        **student_t_training_logs,
         **runtime_logs,
         **cluster_stats,
         **embedding_stats,
@@ -297,32 +324,114 @@ def _train_student_t_from_cache(
     cache: dict[str, Any],
     config: dict[str, Any],
     device: torch.device,
-) -> None:
+    *,
+    checkpoint_dir: Path,
+    resume_from_checkpoint: Path | None = None,
+) -> dict[str, Any]:
     model.train()
     model.backbone.eval()
     batch_size = int(config["trainer"]["batch_size"])
     max_epochs = int(config["trainer"]["max_epochs"])
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.Adam(params, lr=float(config["trainer"]["lr"]))
+    trainer_config = config.get("trainer", {})
+    checkpoint_interval = int(trainer_config.get("checkpoint_interval", 0))
+    keep_last_n_checkpoints = int(trainer_config.get("keep_last_n_checkpoints", 3))
+    eval_interval = trainer_config.get("eval_interval", "checkpoint")
+    resource_totals = empty_resource_totals()
+    epoch_history: list[dict[str, Any]] = []
+    start_epoch = 0
+    if resume_from_checkpoint is not None:
+        ckpt = torch.load(resume_from_checkpoint, map_location=device, weights_only=False)
+        if ckpt.get("method") != "student_t":
+            raise ValueError(
+                f"Expected StudentT checkpoint, got {ckpt.get('method')!r}"
+            )
+        model.load_state_dict(ckpt["model_state_dict"])
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        epoch_history = list(ckpt.get("epoch_history", []))
+        resource_totals = {
+            **empty_resource_totals(),
+            **dict(ckpt.get("resource_totals", {})),
+        }
+        restore_rng_state(ckpt.get("rng_state"))
+        start_epoch = int(ckpt.get("next_epoch", int(ckpt["epoch"]) + 1))
+    if start_epoch >= max_epochs:
+        return {
+            "student_t_epoch_history": epoch_history,
+            "resource_totals": resource_totals,
+            "eval_interval": eval_interval,
+            "checkpoint_interval": checkpoint_interval,
+        }
     n_samples = cache["cls"].shape[0]
     generator = torch.Generator().manual_seed(int(config["experiment"]["seed"]))
-    for epoch in range(max_epochs):
-        target = _refresh_cached_target(model, cache, device, batch_size=128)
-        permutation = torch.randperm(n_samples, generator=generator)
+    for _ in range(start_epoch):
+        torch.randperm(n_samples, generator=generator)
+    for epoch in range(start_epoch, max_epochs):
+        wall_start = time.perf_counter()
+        epoch_timing: dict[str, float] = {}
         epoch_loss = 0.0
         n_batches = 0
-        for start in range(0, n_samples, batch_size):
-            rows = permutation[start : start + batch_size]
-            encoded = _cached_embeddings(model, cache, rows, device)
-            out = model.head(encoded["embedding"])
-            p = target[rows.to(device)]
-            loss = F.kl_div(out["q"].clamp_min(1e-12).log(), p.detach(), reduction="batchmean")
-            optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            optimizer.step()
-            epoch_loss += float(loss.detach().cpu())
-            n_batches += 1
-        print(f"epoch={epoch + 1} loss={epoch_loss / max(1, n_batches):.6f}", flush=True)
+        with timed_section(epoch_timing, "train_epoch_time_s"):
+            target = _refresh_cached_target(model, cache, device, batch_size=128)
+            permutation = torch.randperm(n_samples, generator=generator)
+            for start in range(0, n_samples, batch_size):
+                rows = permutation[start : start + batch_size]
+                encoded = _cached_embeddings(model, cache, rows, device)
+                out = model.head(encoded["embedding"])
+                p = target[rows.to(device)]
+                loss = F.kl_div(out["q"].clamp_min(1e-12).log(), p.detach(), reduction="batchmean")
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                optimizer.step()
+                epoch_loss += float(loss.detach().cpu())
+                n_batches += 1
+        mean_loss = epoch_loss / max(1, n_batches)
+        checkpoint_saved = should_save_epoch_checkpoint(epoch, checkpoint_interval)
+        epoch_timing.setdefault("checkpoint_save_time_s", 0.0)
+        epoch_timing.setdefault("eval_time_s", 0.0)
+        epoch_log = {
+            "epoch": int(epoch),
+            "loss": float(mean_loss),
+            "train_epoch_time_s": epoch_timing["train_epoch_time_s"],
+            "checkpoint_save_time_s": 0.0,
+            "eval_time_s": 0.0,
+            "epoch_total_wall_time_s": 0.0,
+            "evaluated": False,
+            "checkpoint_saved": bool(checkpoint_saved),
+        }
+        epoch_history.append(epoch_log)
+        if checkpoint_saved:
+            with timed_section(epoch_timing, "checkpoint_save_time_s"):
+                payload = {
+                    "checkpoint_version": 1,
+                    "method": "student_t",
+                    "epoch": int(epoch),
+                    "next_epoch": int(epoch) + 1,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "config": config,
+                    "epoch_history": epoch_history,
+                    "resource_totals": resource_totals,
+                    "checkpoint_interval": checkpoint_interval,
+                    "eval_interval": eval_interval,
+                    "rng_state": capture_rng_state(),
+                }
+                epoch_path = checkpoint_dir / f"epoch_{epoch + 1:04d}.ckpt"
+                latest_path = checkpoint_dir / "latest.ckpt"
+                atomic_torch_save(payload, epoch_path)
+                copy_as_latest(epoch_path, latest_path)
+                prune_old_epoch_checkpoints(checkpoint_dir, keep_last_n_checkpoints)
+        epoch_timing["epoch_total_wall_time_s"] = time.perf_counter() - wall_start
+        epoch_log.update(epoch_timing)
+        update_resource_totals(resource_totals, epoch_timing)
+        print(f"epoch={epoch + 1} loss={mean_loss:.6f}", flush=True)
+    return {
+        "student_t_epoch_history": epoch_history,
+        "resource_totals": resource_totals,
+        "eval_interval": eval_interval,
+        "checkpoint_interval": checkpoint_interval,
+    }
 
 
 def _predict_from_cache(

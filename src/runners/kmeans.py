@@ -7,7 +7,6 @@ from typing import Any
 import torch
 
 from src.data import ClusteringDataModule
-from src.evaluation import compute_clustering_metrics
 from src.experiments.config import save_experiment_config
 from src.experiments.outputs import write_outputs
 from src.features import DINOv2Backbone
@@ -16,12 +15,12 @@ from src.models.clustering.kmeans import fit_kmeans
 from src.runners.common import (
     apply_runtime_settings,
     assert_backbone_frozen,
-    build_assignment_payload,
-    get_peak_gpu_mb,
+    finalize_run,
     prepare_runner_context,
 )
 from src.runners.diagnostics import attention_diagnostics, cluster_diagnostics, embedding_diagnostics
 from src.runners.embedding_export import extract_deterministic_embeddings
+from src.evaluation import compute_clustering_metrics
 from src.utils import ExperimentResult, resolve_gloca_name
 
 
@@ -84,52 +83,9 @@ def run_kmeans(config: dict[str, Any]) -> ExperimentResult:
     head_train_time_s = time.perf_counter() - fit_start
     total_time_s = time.perf_counter() - total_start
     assignments = kmeans_result["assignments"]
-    assignments_np = assignments.numpy()
     clustered_embeddings = embeddings.float()
 
-    metrics = compute_clustering_metrics(
-        extracted["labels"].numpy(),
-        assignments_np,
-        clustered_embeddings.numpy(),
-    )
-    cluster_stats = cluster_diagnostics(assignments_np, int(config["head"]["n_clusters"]))
-    embedding_stats = embedding_diagnostics(clustered_embeddings)
-    attention_stats = attention_diagnostics(extracted["attention"])
-    peak_gpu_mb = get_peak_gpu_mb()
-
-    assignments_payload = build_assignment_payload(
-        config=config,
-        spec=spec,
-        head=effective_head,
-        image_ids=extracted["image_ids"],
-        labels=extracted["labels"],
-        assignments=assignments,
-        patch_grid=extracted["patch_grid"],
-    )
-    metrics_row = {
-        "experiment": config["experiment"]["name"],
-        "head": effective_head,
-        "backbone": config["backbone"]["variant"],
-        "dataset": spec.name,
-        "seed": seed,
-        "gloca": gloca_name,
-        "n_clusters": int(config["head"]["n_clusters"]),
-        "n_images": int(clustered_embeddings.shape[0]),
-        "ari": metrics["ari"],
-        "nmi": metrics["nmi"],
-        "acc": metrics["acc"],
-        "silhouette": metrics["silhouette"],
-        **cluster_stats,
-        **embedding_stats,
-        **attention_stats,
-        "backbone_cache_time_s": extracted["cache_time_s"],
-        "head_train_time_s": head_train_time_s,
-        "total_time_s": total_time_s,
-        "inference_time_s": 0.0,
-        "peak_gpu_mb": peak_gpu_mb,
-        "uses_cached_backbone_features": True,
-    }
-    logs = {
+    logs_extras = {
         "non_trainable_baseline": True,
         "checkpoint_written": False,
         "uses_cached_backbone_features": True,
@@ -156,17 +112,28 @@ def run_kmeans(config: dict[str, Any]) -> ExperimentResult:
         "kmeans_tol": float(baseline["kmeans_tol"]),
         "kmeans_logs": kmeans_result["logs"],
         **runtime_logs,
-        **cluster_stats,
-        **embedding_stats,
-        **attention_stats,
     }
-    write_outputs(
+    return finalize_run(
         output_dir=output_dir,
         config=config,
-        assignments_payload=assignments_payload,
-        metrics_row=metrics_row,
+        spec=spec,
+        head=effective_head,
+        image_ids=extracted["image_ids"],
+        labels=extracted["labels"],
+        assignments=assignments,
         embeddings=clustered_embeddings,
         attention=extracted["attention"],
-        logs=logs,
+        patch_grid=extracted["patch_grid"],
+        seed=seed,
+        backbone_cache_time_s=float(extracted["cache_time_s"]),
+        head_train_time_s=head_train_time_s,
+        total_time_s=total_time_s,
+        inference_time_s=0.0,
+        uses_cached_backbone_features=True,
+        logs_extras=logs_extras,
+        metrics_fn=compute_clustering_metrics,
+        cluster_diagnostics_fn=cluster_diagnostics,
+        embedding_diagnostics_fn=embedding_diagnostics,
+        attention_diagnostics_fn=attention_diagnostics,
+        writer=write_outputs,
     )
-    return ExperimentResult(output_dir=str(output_dir), metrics=metrics_row)
