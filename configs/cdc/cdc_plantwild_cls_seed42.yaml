@@ -1,7 +1,7 @@
 experiment:
-  name: cdc_cls_seed42
+  name: base
   seed: 42
-  output_dir: outputs/cdc
+  output_dir: outputs/main_experiments
 
 dataset:
   name: plantwild
@@ -33,9 +33,9 @@ cdc:
   meta_batch_size: 2048
   sub_batch_size: 256
   per_class_selected_num: auto
-  calibration_k: 230
+  calibration_k: 160
   meta_batch_drop_last: false
-  w_en: 1.0
+  w_en: 1.5
   prototype_init: true
   orthogonalize_init: false
   kmeans_init: kmeans++
@@ -68,7 +68,7 @@ prediction:
   export_attention: true
 
 trainer:
-  max_epochs: 100
+  max_epochs: 120
   batch_size: 256
   lr: 1.0e-4
   accelerator: auto
@@ -80,5 +80,4 @@ trainer:
   checkpoint_interval: 10
   eval_interval: checkpoint
   resume_from_checkpoint: auto
-  keep_last_n_checkpoints: 3
   profile_resources: true

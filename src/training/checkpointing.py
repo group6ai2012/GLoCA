@@ -60,18 +60,17 @@ def restore_rng_state(state: dict[str, Any] | None) -> None:
     if state.get("numpy") is not None:
         np.random.set_state(state["numpy"])
     if state.get("torch") is not None:
-        torch.set_rng_state(state["torch"])
+        torch.set_rng_state(_rng_byte_tensor(state["torch"]))
     if torch.cuda.is_available() and state.get("cuda") is not None:
-        torch.cuda.set_rng_state_all(state["cuda"])
+        torch.cuda.set_rng_state_all(
+            [_rng_byte_tensor(cuda_state) for cuda_state in state["cuda"]]
+        )
 
 
-def prune_old_epoch_checkpoints(checkpoint_dir: Path, keep_last_n: int) -> None:
-    keep_last_n = int(keep_last_n)
-    if keep_last_n <= 0:
-        return
-    paths = sorted(Path(checkpoint_dir).glob("epoch_*.ckpt"))
-    for path in paths[:-keep_last_n]:
-        path.unlink(missing_ok=True)
+def _rng_byte_tensor(value: Any) -> torch.Tensor:
+    if torch.is_tensor(value):
+        return value.detach().cpu().to(dtype=torch.uint8).contiguous()
+    return torch.as_tensor(value, dtype=torch.uint8, device="cpu").contiguous()
 
 
 def should_save_epoch_checkpoint(epoch: int, interval: int) -> bool:

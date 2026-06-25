@@ -95,6 +95,8 @@ cdc:
   w_en:
   prototype_init:
   orthogonalize_init:
+  orthogonalize_epochs:
+  orthogonalize_scale:
   kmeans_init:
   kmeans_n_init:
   kmeans_max_iter:
@@ -139,7 +141,6 @@ trainer:
   checkpoint_interval:
   eval_interval:
   resume_from_checkpoint:
-  keep_last_n_checkpoints:
   profile_resources:
 
 # Used only by scripts/run_baselines.py.
@@ -172,7 +173,6 @@ base_config:
     checkpoint_interval:
     eval_interval:
     resume_from_checkpoint:
-    keep_last_n_checkpoints:
     profile_resources:
 
 sweep:

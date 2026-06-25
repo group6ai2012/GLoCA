@@ -10,7 +10,7 @@ from src.data import ClusteringDataModule
 from src.evaluation import compute_clustering_metrics
 from src.evaluation.clustering_metrics import calibration_error_metrics
 from src.experiments.config import save_experiment_config, validate_cdc_config
-from src.experiments.outputs import write_outputs
+from src.experiments.outputs import append_csv_row, write_outputs
 from src.features import DINOv2Backbone
 from src.models import ClusteringBaseModel, build_adapter
 from src.models.clustering import CDCHead
@@ -102,6 +102,37 @@ def run_cdc(config: dict[str, Any]) -> ExperimentResult:
         config.get("trainer", {}).get("resume_from_checkpoint", "auto"),
         checkpoint_dir,
     )
+
+    def log_checkpoint_metrics(epoch_logs: dict[str, Any]) -> None:
+        epoch = int(epoch_logs["epoch"])
+        append_csv_row(
+            output_dir / "checkpoint_metrics.csv",
+            {
+                "experiment": config["experiment"]["name"],
+                "head": "cdc",
+                "backbone": config["backbone"]["variant"],
+                "dataset": spec.name,
+                "seed": seed,
+                "gloca": gloca_name,
+                "n_clusters": int(config["head"]["n_clusters"]),
+                "epoch": epoch,
+                "epoch_1based": epoch + 1,
+                "checkpoint": f"checkpoints/epoch_{epoch + 1:04d}.ckpt",
+                "ari": float(epoch_logs.get("ari", float("nan"))),
+                "nmi": float(epoch_logs.get("nmi", float("nan"))),
+                "acc": float(epoch_logs.get("acc", float("nan"))),
+                "loss_total_mean": float(epoch_logs.get("loss_total_mean", float("nan"))),
+                "loss_clustering_mean": float(epoch_logs.get("loss_clustering_mean", float("nan"))),
+                "loss_calibration_mean": float(epoch_logs.get("loss_calibration_mean", float("nan"))),
+                "selected_pseudo_label_count": int(epoch_logs.get("selected_pseudo_label_count", 0)),
+                "reliable_sample_ratio": float(epoch_logs.get("reliable_sample_ratio", float("nan"))),
+                "train_epoch_time_s": float(epoch_logs.get("train_epoch_time_s", 0.0)),
+                "checkpoint_save_time_s": float(epoch_logs.get("checkpoint_save_time_s", 0.0)),
+                "eval_time_s": float(epoch_logs.get("eval_time_s", 0.0)),
+                "epoch_total_wall_time_s": float(epoch_logs.get("epoch_total_wall_time_s", 0.0)),
+            },
+        )
+
     trainer = CDCTrainer(
         model=model,
         datamodule=datamodule,
@@ -109,6 +140,7 @@ def run_cdc(config: dict[str, Any]) -> ExperimentResult:
         device=device,
         checkpoint_dir=checkpoint_dir,
         resume_from_checkpoint=resume_path,
+        checkpoint_metric_logger=log_checkpoint_metrics,
     )
 
     train_start = time.perf_counter()
@@ -181,6 +213,7 @@ def run_cdc(config: dict[str, Any]) -> ExperimentResult:
         "num_workers": int(config["trainer"]["num_workers"]),
         "head_train_time_s": head_train_time_s,
         "inference_time_s": inference_time_s,
+        "checkpoint_metrics_path": "checkpoint_metrics.csv",
         **runtime_logs,
     }
     result = finalize_run(

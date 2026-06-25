@@ -8,13 +8,11 @@ from src.models.clustering.kmeans import (
     torch_spherical_kmeans,
 )
 from src.models.clustering.propos import ProPosHead
-from src.models.clustering.student_t import StudentTHead
 
 __all__ = [
     "CDCHead",
     "ClusteringHead",
     "ProPosHead",
-    "StudentTHead",
     "TorchKMeans",
     "TorchSphericalKMeans",
     "fit_kmeans",

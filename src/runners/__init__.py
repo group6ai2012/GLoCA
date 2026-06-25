@@ -1,4 +1,4 @@
-__all__ = ["run_cdc", "run_dec_idec", "run_kmeans", "run_propos", "run_student_t", "run_dec"]
+__all__ = ["run_cdc", "run_dec_idec", "run_kmeans", "run_propos"]
 
 
 def __getattr__(name: str):
@@ -18,8 +18,4 @@ def __getattr__(name: str):
         from src.runners.propos import run_propos
 
         return run_propos
-    if name in {"run_dec", "run_student_t"}:
-        from src.runners.student_t import run_dec, run_student_t
-
-        return {"run_dec": run_dec, "run_student_t": run_student_t}[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

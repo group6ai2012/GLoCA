@@ -1,41 +1,49 @@
 experiment:
-  name: cdc_cls_smoke
-  seed: 42
-  output_dir: outputs/cdc_smoke
+  name: gloca_gated
+  seed: 67
+  output_dir: outputs/main_experiments
+
 dataset:
-  name: plantwild
-  limit_per_class: 2
+  name: plantseg
+  limit_per_class:
   include_classes:
   training_views: cdc_weak_strong_calibration
+
 backbone:
   family: dinov2
   variant: facebook/dinov2-small
   freeze: true
   image_size: 224
+
 gloca:
-  enabled: false
-  name: disabled
+  enabled: true
+  name: gloca_gated
   embedding_dim: 384
+  alpha_init: 0.0
   normalize_output: true
+  attention_hidden_dim: 384
+  mlp_hidden_dim: 768
+
 head:
   name: cdc
   n_clusters: auto
   training_mode: cdc
+
 cdc:
   embedding_dim: 384
   hidden_dim: 512
   training_views: cdc_weak_strong_calibration
   meta_batch_size: 2048
-  sub_batch_size: 128
+  sub_batch_size: 256
   per_class_selected_num: auto
   calibration_k: 160
   meta_batch_drop_last: false
   w_en: 1.0
   prototype_init: true
-  orthogonalize_init: false
+  orthogonalize_init: true
   kmeans_init: kmeans++
-  kmeans_n_init: 2
-  kmeans_max_iter: 25
+  kmeans_n_init: 10
+  kmeans_max_iter: 100
   kmeans_tol: 1.0e-4
   weight_decay: 0.0
   optimizer: adamw
@@ -56,18 +64,22 @@ cdc:
       cutout_length: 56
     calibration:
       name: deterministic_prediction
+
 prediction:
   deterministic: true
   export_embeddings: true
   export_attention: true
+
 trainer:
-  max_epochs: 1
-  batch_size: 128
+  max_epochs: 200
+  batch_size: 256
   lr: 1.0e-4
   accelerator: auto
   precision: 32
   matmul_precision: high
-  num_workers: 0
+  num_workers: 4
+  pin_memory: true
+  persistent_workers: true
   checkpoint_interval: 10
   eval_interval: checkpoint
   resume_from_checkpoint: auto

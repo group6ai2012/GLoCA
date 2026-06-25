@@ -89,8 +89,9 @@ class CDCHead(nn.Module):
         kmeans_tol: float = 1.0e-4,
         seed: int = 0,
         orthogonalize: bool = False,
+        orthogonalize_epochs: int = 2000,
+        orthogonalize_scale: float = 5.0,
     ) -> dict[str, Any]:
-        del orthogonalize
         features = torch.nan_to_num(
             embeddings.detach().float().cpu(), nan=0.0, posinf=0.0, neginf=0.0
         )
@@ -152,15 +153,38 @@ class CDCHead(nn.Module):
                 device=torch.device("cpu"),
             )
             w2 = second["centers"].float()
+            orthogonalization_logs: dict[str, Any] = {}
+            if orthogonalize:
+                w1, w1_logs = orthogonalize_prototype_rows(
+                    w1,
+                    epochs=orthogonalize_epochs,
+                    scale=orthogonalize_scale,
+                    use_relu=True,
+                )
+                w2, w2_logs = orthogonalize_prototype_rows(
+                    w2,
+                    epochs=orthogonalize_epochs,
+                    scale=orthogonalize_scale,
+                    use_relu=True,
+                )
+                orthogonalization_logs = {
+                    "orthogonalize_epochs": int(orthogonalize_epochs),
+                    "orthogonalize_scale": float(orthogonalize_scale),
+                    "first_orthogonalization_logs": w1_logs,
+                    "second_orthogonalization_logs": w2_logs,
+                }
             self.clustering_head.copy_prototype_weights(w1, w2)
             self.calibration_head.copy_prototype_weights(w1, w2)
             return {
-                "cdc_init_mode": "prototype_kmeans",
+                "cdc_init_mode": "prototype_kmeans_orthogonalized"
+                if orthogonalize
+                else "prototype_kmeans",
                 "prototype_init_used": True,
-                "orthogonalization_used": False,
+                "orthogonalization_used": bool(orthogonalize),
                 "fallback_reason": "",
                 "first_kmeans_logs": first["logs"],
                 "second_kmeans_logs": second["logs"],
+                **orthogonalization_logs,
             }
         except Exception as exc:
             return {
@@ -169,6 +193,83 @@ class CDCHead(nn.Module):
                 "orthogonalization_used": False,
                 "fallback_reason": str(exc),
             }
+
+
+def orthogonalize_prototype_rows(
+    prototypes: torch.Tensor,
+    *,
+    epochs: int = 2000,
+    scale: float = 5.0,
+    use_relu: bool = False,
+) -> tuple[torch.Tensor, dict[str, Any]]:
+    """Port of CDC's orth_train prototype refinement, without assuming CUDA."""
+
+    if prototypes.ndim != 2:
+        raise ValueError(
+            f"expected prototype matrix [N, D], got {tuple(prototypes.shape)}"
+        )
+    rows = int(prototypes.shape[0])
+    if rows <= 0:
+        raise ValueError(
+            f"expected non-empty prototype matrix, got {tuple(prototypes.shape)}"
+        )
+
+    epochs = int(epochs)
+    if epochs < 0:
+        raise ValueError(f"orthogonalize_epochs must be non-negative, got {epochs}")
+    if epochs == 0:
+        return prototypes.detach().clone(), {
+            "epochs": 0,
+            "scale": float(scale),
+            "use_relu": bool(use_relu),
+            "initial_loss": None,
+            "final_loss": None,
+        }
+
+    device = prototypes.device
+    dtype = prototypes.dtype
+    with torch.enable_grad():
+        z = (
+            prototypes.detach()
+            .clone()
+            .to(device=device, dtype=dtype)
+            .requires_grad_(True)
+        )
+        w = (
+            prototypes.detach()
+            .clone()
+            .to(device=device, dtype=dtype)
+            .requires_grad_(True)
+        )
+        labels = torch.arange(rows, device=device)
+        optimizer = torch.optim.SGD(
+            [z, w], lr=0.1, momentum=0.9, weight_decay=1.0e-4
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=epochs, eta_min=0.0
+        )
+        criterion = nn.CrossEntropyLoss()
+        initial_loss: float | None = None
+        final_loss = float("nan")
+        for epoch in range(epochs):
+            z_active = F.relu(z) if use_relu else z
+            out = F.linear(F.normalize(z_active, dim=1), F.normalize(w, dim=1))
+            loss = criterion(out * float(scale), labels)
+            if epoch == 0:
+                initial_loss = float(loss.detach().cpu())
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+            final_loss = float(loss.detach().cpu())
+
+    return torch.nan_to_num(w.detach(), nan=0.0, posinf=0.0, neginf=0.0), {
+        "epochs": epochs,
+        "scale": float(scale),
+        "use_relu": bool(use_relu),
+        "initial_loss": initial_loss,
+        "final_loss": final_loss,
+    }
 
 
 def _row_zscore(features: torch.Tensor) -> torch.Tensor:

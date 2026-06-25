@@ -68,7 +68,6 @@ src/
   models/gloca.py
   models/clustering/kmeans.py
   models/clustering/propos.py
-  models/clustering/student_t.py
   models/baselines/dec_idec.py
   runners/
   training/propos_trainer.py
@@ -97,7 +96,6 @@ Implemented method status:
 ```text
 K-Means / spherical K-Means: implemented baseline layer
 DEC / IDEC: implemented DINO-CLS standalone baselines
-StudentT: implemented diagnostic centroid head
 ProPos: implemented live-image trainable method and diagnostic baseline
 CDC: not implemented yet; next new method
 CoHiClust: not implemented yet; later method
@@ -333,7 +331,6 @@ GLoCA scalar diagnostics
 Attention visualization utility
 K-Means / spherical K-Means baselines
 DEC / IDEC baselines
-StudentT diagnostic head
 ProPos model/trainer/runner
 ProPos/GLoCA diagnostic matrix
 Assignment schema
@@ -443,7 +440,6 @@ These files are optional CDC artifacts, not required outputs for other methods.
 Phase 1 — Data layer                              DONE
 Phase 2 — DINOv2 backbone wrapper                 DONE
 Phase 3 — GLoCA module                            DONE
-Phase 4 — StudentT diagnostic head                 DONE / DIAGNOSTIC
 Phase 5 — Baseline suite                          DONE
 Phase 6 — ProPos                                  DONE / IMPLEMENTED BASELINE + DIAGNOSTIC
 Phase 6.1 — GLoCA diagnostics + attention maps     DONE
@@ -971,7 +967,6 @@ Keep report interpretation disciplined:
 
 - K-Means is baseline context.
 - DEC/IDEC are generic DINO-CLS baselines.
-- StudentT is diagnostic only.
 - ProPos is implemented live-image diagnostic/baseline evidence.
 - CDC is the next main alignment test.
 - CoHiClust is later hierarchy/structure analysis.

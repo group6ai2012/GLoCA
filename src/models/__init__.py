@@ -1,5 +1,5 @@
 from src.models.base import ClusteringBaseModel
-from src.models.clustering import ClusteringHead, ProPosHead, StudentTHead
+from src.models.clustering import ClusteringHead, ProPosHead
 from src.models.gloca import (
     ADAPTERS,
     CLSAdapter,
@@ -20,6 +20,5 @@ __all__ = [
     "GatedAttentionPooling",
     "ProPosHead",
     "SimpleAttentionPooling",
-    "StudentTHead",
     "build_adapter",
 ]

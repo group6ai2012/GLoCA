@@ -20,6 +20,15 @@ GLoCA embedding
 
 GLoCA is an embedding adapter, not a clustering method. Clustering methods consume the final embedding tensor produced by the shared model path.
 
+The main reported experiment scope is now:
+
+```text
+plantvillage
+plantseg
+```
+
+`plantwild` / PlantWild v2 remains registered and useful for smoke tests, debugging, and historical artifact inspection, but it is not a main reported experiment dataset. PlantSeg has been identified as a near duplicate of PlantWild v2, so PlantWild results should not be treated as independent reported evidence.
+
 ## Active Layout
 
 The active source tree is:
@@ -60,7 +69,6 @@ src/
       cdc.py
       kmeans.py
       propos.py
-      student_t.py
 
   runners/
     common.py
@@ -70,7 +78,6 @@ src/
     embedding_export.py
     kmeans.py
     propos.py
-    student_t.py
 
   training/
     checkpointing.py
@@ -150,7 +157,6 @@ trainer:
   checkpoint_interval: 10
   eval_interval: checkpoint
   resume_from_checkpoint: auto
-  keep_last_n_checkpoints: 3
   profile_resources: true
 ```
 
@@ -255,6 +261,8 @@ plantseg      -> data/raw/plantseg_folder
 plantvillage  -> data/raw/plantvillage
 plantwild     -> data/raw/plantwild_v2
 ```
+
+For reporting, use PlantVillage and PlantSeg. Treat PlantWild as smoke/debug-only even though it remains available through the registry and existing configs/artifacts.
 
 `DatasetSpec` also supports `root`, `limit_per_class`, and `include_classes`.
 
@@ -413,19 +421,6 @@ DEC refinement trains the encoder and cluster centers. IDEC refinement trains th
 
 The target update parser treats null, empty, `"none"`, `"null"`, `"fixed"`, and `0` as fixed-target mode. A positive integer enables periodic target refresh.
 
-### StudentT
-
-Implementation files:
-
-```text
-src/models/clustering/student_t.py
-src/runners/student_t.py
-```
-
-`StudentTHead` is a diagnostic centroid head over an existing embedding. It uses Student-t soft assignment, a target distribution, and K-Means center initialization.
-
-`run_student_t(config)` exists as a runner and writes the standard run outputs plus `checkpoint.ckpt`. It supports direct CLS and optional GLoCA embeddings through the shared composition. The YAML baseline sweep dispatcher currently accepts `kmeans` and `dec_idec` runner names.
-
 ### ProPos
 
 Implementation files:
@@ -536,7 +531,7 @@ The default hidden dimension in the provided CDC configs is `512`, and the input
 - logs losses, configured and actual meta-batch sizes, selected sample counts, reliable sample ratio, confidence stats, pseudo-label entropy, skipped meta-batch/chunk counts, CDC initialization mode, checkpoint/eval schedule fields, separated resource timing totals, and optional GLoCA diagnostics.
 - uses tqdm for live batch and epoch progress, and reports deterministic calibration-head NMI, ARI, and ACC only when `trainer.eval_interval` schedules trainer-level evaluation.
 
-The provided CDC PlantWild configs use this virtual-batch pattern:
+The provided CDC PlantWild configs are retained for smoke/debugging and historical reproducibility. They use this virtual-batch pattern:
 
 ```yaml
 trainer:
@@ -552,7 +547,7 @@ cdc:
   meta_batch_drop_last: false
 ```
 
-With `per_class_selected_num: auto`, reliable selection is computed from the actual meta-batch size. For PlantWild-115, a full 2048-sample meta-batch selects up to `2048 // 115 = 17` samples per predicted class. Small smoke subsets can produce a smaller final partial meta-batch, so their selected-per-class count can be lower.
+With `per_class_selected_num: auto`, reliable selection is computed from the actual meta-batch size. For PlantWild-115, a full 2048-sample meta-batch selects up to `2048 // 115 = 17` samples per predicted class. Small smoke subsets can produce a smaller final partial meta-batch, so their selected-per-class count can be lower. PlantWild CDC runs should be interpreted as smoke/debug runs, not as main reported results.
 
 CDC initialization attempts the reference-style deterministic embedding prototype initialization with local torch K-Means:
 
@@ -561,7 +556,7 @@ embeddings -> row z-score/normalize -> K-Means(hidden_dim) for W1
 hidden activations -> row z-score/normalize -> K-Means(n_clusters) for W2
 ```
 
-The original CDC `orth_train` stage is exposed as configuration metadata but is not run in this local first pass. If the prototype path is not feasible, for example because a smoke subset has fewer samples than `hidden_dim`, CDC keeps random initialization and writes `cdc_init_mode: random` plus a fallback reason to `logs.json`.
+When `cdc.orthogonalize_init: true`, CDC additionally runs the original CDC `orth_train`-style prototype row refinement after both K-Means stages and before copying weights into the clustering and calibration heads. The local port is CUDA-optional and keeps the reference defaults of scale `5.0` and `2000` optimization epochs unless `cdc.orthogonalize_scale` or `cdc.orthogonalize_epochs` are provided. Logs record `cdc_init_mode: prototype_kmeans_orthogonalized` and the per-layer orthogonalization losses. If the prototype path is not feasible, for example because a smoke subset has fewer samples than `hidden_dim`, CDC keeps random initialization and writes `cdc_init_mode: random` plus a fallback reason to `logs.json`.
 
 Final CDC prediction uses the calibration head by default, matching the CDC-Cal interpretation. The runner writes the standard canonical files plus `checkpoint.ckpt`, `confidence.pt`, `calibrated_confidence.pt`, and `pseudo_labels.pt`. GLoCA runs also write `attention.pt`.
 
@@ -679,6 +674,8 @@ runs:
   idec_cls
 ```
 
+Although the checked-in full baseline sweep still includes PlantWild, PlantWild rows are smoke/debug or legacy context only. The main reported baseline comparisons should use PlantVillage and PlantSeg.
+
 `configs/baselines/baselines_smoke.yaml` defines a PlantWild seed-42 smoke sweep with two K-Means runs and `limit_per_class: 2`.
 
 The baseline script writes:
@@ -735,6 +732,14 @@ checkpoints/
 ```
 
 `latest.ckpt` is a real copied file for Windows compatibility, not a symlink. The final `checkpoint.ckpt` artifact remains separate and unchanged for canonical output compatibility.
+
+Trainable runners append checkpoint-time metrics to:
+
+```text
+checkpoint_metrics.csv
+```
+
+This file is append-only during training and records rows for interval checkpoint epochs. It does not replace the canonical one-row final `metrics.csv`.
 
 Output writing is centralized in `src/experiments/outputs.py`. Assignment payloads are validated before writing.
 
@@ -886,9 +891,9 @@ Silhouette: sklearn silhouette_score with sample_size <= 2000
 
 Diagnostics include cluster occupancy, normalized cluster-size entropy, embedding variance/norm statistics, and attention entropy/max/top-5 mass/variance when attention exists.
 
-## Current Recorded ProPos Findings
+## Historical PlantWild ProPos Findings
 
-`docs/report_1.md` records the current PlantWild 200-epoch ProPos analysis for these seed-42 runs:
+`docs/report_1.md` records a historical PlantWild 200-epoch ProPos analysis for these seed-42 runs:
 
 ```text
 outputs/propos_full/propos_cls_full_200ep/propos/plantwild/seed_42
@@ -896,6 +901,8 @@ outputs/propos_full/propos_gloca_gated_full_200ep/propos/plantwild/seed_42
 ```
 
 The two runs share dataset, seed, backbone, head family, evaluation code, and output schema. Their ProPos schedules differ in `kmeans_interval`: CLS uses `1`, and GLoCA-gated uses `2`.
+
+Because PlantWild is now smoke/debug-only and PlantSeg has been identified as a near duplicate of PlantWild v2, these PlantWild ProPos findings should not be used as main reported experiment evidence.
 
 Final metrics:
 
@@ -974,12 +981,13 @@ Current tests cover:
 ## Present Policy Summary
 
 - The main comparison pattern is same dataset, same seed, same backbone, same clustering method, and CLS versus GLoCA embedding.
+- The main reported experiment datasets are PlantVillage and PlantSeg.
+- PlantWild / PlantWild v2 is smoke/debug-only and should not be reported as independent main evidence.
 - DINOv2 is frozen in the implemented runners.
 - The shared embedding path is `ClusteringBaseModel.encode_view()`.
 - Clustering methods consume the final embedding tensor only.
 - K-Means and spherical K-Means are deterministic cached-embedding baselines.
 - DEC and IDEC are standalone DINO CLS autoencoder baselines.
-- StudentT is a diagnostic centroid head available in code.
 - ProPos is the live two-view trainable clustering method.
 - GLoCA variants live in `src/models/gloca.py`.
 - Output writing lives in `src/experiments/outputs.py`.

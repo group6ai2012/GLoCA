@@ -1,10 +1,10 @@
 experiment:
   name: base
   seed: 42
-  output_dir: outputs
+  output_dir: outputs/main_experiments
 
 dataset:
-  name: plantwild
+  name: plantvillage
   limit_per_class:
   include_classes:
   training_views: auto
@@ -42,7 +42,7 @@ propos:
   kmeans_n_init: 10
   kmeans_max_iter: 300
   kmeans_tol: 1.0e-4
-  warmup_epochs: 10
+  warmup_epochs: 5
   predictor_lr_multiplier: 10.0
   weight_decay: 1.0e-4
   optimizer: adamw
@@ -60,14 +60,14 @@ prediction:
   export_attention: true
 
 trainer:
-  max_epochs: 100
+  max_epochs: 30
   batch_size: 256
   lr: 5.0e-4
   accelerator: auto
   precision: 32
   matmul_precision: high
   num_workers: 4
-  checkpoint_interval: 10
+  checkpoint_interval: 3
   eval_interval: checkpoint
   resume_from_checkpoint: auto
   profile_resources: true

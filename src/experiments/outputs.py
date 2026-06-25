@@ -39,3 +39,20 @@ def write_outputs(
         torch.save(attention.cpu(), output_dir / "attention.pt")
     with (output_dir / "logs.json").open("w", encoding="utf-8") as handle:
         json.dump(logs, handle, indent=2)
+
+
+def append_csv_row(path: Path, row: dict[str, Any]) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    exists = path.exists() and path.stat().st_size > 0
+    if exists:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.reader(handle)
+            fieldnames = next(reader)
+    else:
+        fieldnames = list(row.keys())
+    with path.open("a", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+        if not exists:
+            writer.writeheader()
+        writer.writerow({key: row.get(key, "") for key in fieldnames})

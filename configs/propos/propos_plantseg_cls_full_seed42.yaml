@@ -1,10 +1,10 @@
 experiment:
   name: base
   seed: 42
-  output_dir: outputs
+  output_dir: outputs/main_experiments
 
 dataset:
-  name: plantwild
+  name: plantseg
   limit_per_class:
   include_classes:
   training_views: auto

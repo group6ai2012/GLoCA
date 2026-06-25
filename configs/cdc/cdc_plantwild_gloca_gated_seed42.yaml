@@ -1,7 +1,7 @@
 experiment:
-  name: cdc_gloca_gated_seed42
+  name: gloca_gated
   seed: 42
-  output_dir: outputs/cdc
+  output_dir: outputs/main_experiments
 
 dataset:
   name: plantwild
@@ -21,6 +21,8 @@ gloca:
   embedding_dim: 384
   alpha_init: 0.0
   normalize_output: true
+  attention_hidden_dim: 384
+  mlp_hidden_dim: 192
 
 head:
   name: cdc
@@ -34,9 +36,9 @@ cdc:
   meta_batch_size: 2048
   sub_batch_size: 256
   per_class_selected_num: auto
-  calibration_k: 230
+  calibration_k: 160
   meta_batch_drop_last: false
-  w_en: 1.0
+  w_en: 1.5
   prototype_init: true
   orthogonalize_init: false
   kmeans_init: kmeans++
@@ -45,8 +47,8 @@ cdc:
   kmeans_tol: 1.0e-4
   weight_decay: 0.0
   optimizer: adamw
-  gloca_lr_multiplier: 0.1
-  gloca_alpha_lr_multiplier: 10.0
+  gloca_lr_multiplier: 1.0
+  gloca_alpha_lr_multiplier: 1.0
   freeze_gloca: false
   freeze_gloca_epochs: 0
   log_gloca_diagnostics: true
@@ -69,7 +71,7 @@ prediction:
   export_attention: true
 
 trainer:
-  max_epochs: 100
+  max_epochs: 120
   batch_size: 256
   lr: 1.0e-4
   accelerator: auto
@@ -81,5 +83,4 @@ trainer:
   checkpoint_interval: 10
   eval_interval: checkpoint
   resume_from_checkpoint: auto
-  keep_last_n_checkpoints: 3
   profile_resources: true

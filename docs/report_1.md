@@ -187,8 +187,6 @@ Current PlantWild baseline aggregate results across seeds `42 69 67`:
 | K-Means GLoCA-gated untrained | 0.275219 | 0.642475 | 0.379265 | 0.057952 |
 | IDEC CLS | 0.260701 | 0.632378 | 0.360260 | 0.169330 |
 | DEC CLS | 0.260629 | 0.632366 | 0.360260 | 0.169511 |
-| StudentT CLS | 0.243501 | 0.615842 | 0.344562 | 0.027989 |
-| StudentT GLoCA-gated | 0.078749 | 0.392538 | 0.122389 | 0.266633 |
 
 Seed-42 ProPos final values are above the current aggregate ARI/ACC baseline frontier:
 

@@ -1,10 +1,10 @@
 experiment:
-  name: base
+  name: gloca_gated
   seed: 42
-  output_dir: outputs
+  output_dir: outputs/main_experiments
 
 dataset:
-  name: plantwild
+  name: plantvillage
   limit_per_class:
   include_classes:
   training_views: auto
@@ -16,10 +16,13 @@ backbone:
   image_size: 224
 
 gloca:
-  enabled: false
-  name: disabled
+  enabled: true
+  name: gloca_gated
   embedding_dim: 384
+  alpha_init: 0.0
   normalize_output: true
+  attention_hidden_dim: 384
+  mlp_hidden_dim: 768
 
 head:
   name: propos
@@ -42,7 +45,7 @@ propos:
   kmeans_n_init: 10
   kmeans_max_iter: 300
   kmeans_tol: 1.0e-4
-  warmup_epochs: 10
+  warmup_epochs: 5
   predictor_lr_multiplier: 10.0
   weight_decay: 1.0e-4
   optimizer: adamw
@@ -52,7 +55,7 @@ propos:
   gloca_alpha_lr_multiplier: 1.0
   freeze_gloca: false
   freeze_gloca_epochs: 0
-  log_gloca_diagnostics: false
+  log_gloca_diagnostics: true
 
 prediction:
   deterministic: true
@@ -60,14 +63,14 @@ prediction:
   export_attention: true
 
 trainer:
-  max_epochs: 100
+  max_epochs: 30
   batch_size: 256
   lr: 5.0e-4
   accelerator: auto
   precision: 32
   matmul_precision: high
   num_workers: 4
-  checkpoint_interval: 10
+  checkpoint_interval: 3
   eval_interval: checkpoint
   resume_from_checkpoint: auto
   profile_resources: true

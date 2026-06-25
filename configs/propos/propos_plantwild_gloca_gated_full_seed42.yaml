@@ -1,7 +1,7 @@
 experiment:
-  name: propos_gloca_gated_full_200ep
+  name: gloca_gated
   seed: 42
-  output_dir: outputs/propos_full
+  output_dir: outputs
 
 dataset:
   name: plantwild
@@ -21,6 +21,8 @@ gloca:
   embedding_dim: 384
   alpha_init: 0.0
   normalize_output: true
+  attention_hidden_dim: 384
+  mlp_hidden_dim: 96
 
 head:
   name: propos
@@ -38,7 +40,7 @@ propos:
   ema_momentum: 0.996
   ema_momentum_max: 1.0
   ema_momentum_increase: true
-  kmeans_interval: 2
+  kmeans_interval: 1
   kmeans_init: kmeans++
   kmeans_n_init: 10
   kmeans_max_iter: 300
@@ -71,5 +73,4 @@ trainer:
   checkpoint_interval: 10
   eval_interval: checkpoint
   resume_from_checkpoint: auto
-  keep_last_n_checkpoints: 3
   profile_resources: true

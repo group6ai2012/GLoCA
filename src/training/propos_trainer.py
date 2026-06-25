@@ -20,7 +20,6 @@ from src.training.checkpointing import (
     capture_rng_state,
     copy_as_latest,
     empty_resource_totals,
-    prune_old_epoch_checkpoints,
     restore_rng_state,
     should_run_eval,
     should_save_epoch_checkpoint,
@@ -69,6 +68,7 @@ class ProPosTrainer:
         device: torch.device,
         checkpoint_dir: Path | None = None,
         resume_from_checkpoint: Path | None = None,
+        checkpoint_metric_logger: Any | None = None,
     ) -> None:
         self.model = model.to(device)
         self.datamodule = datamodule
@@ -112,10 +112,8 @@ class ProPosTrainer:
         self.checkpoint_dir = None if checkpoint_dir is None else Path(checkpoint_dir)
         self.checkpoint_interval = int(trainer_config.get("checkpoint_interval", 0))
         self.eval_interval = trainer_config.get("eval_interval", "checkpoint")
-        self.keep_last_n_checkpoints = int(
-            trainer_config.get("keep_last_n_checkpoints", 3)
-        )
         self.profile_resources = bool(trainer_config.get("profile_resources", True))
+        self.checkpoint_metric_logger = checkpoint_metric_logger
         self.start_epoch = 0
         self.resource_totals = empty_resource_totals()
         self.global_step = 0
@@ -179,6 +177,8 @@ class ProPosTrainer:
             epoch_timing["epoch_total_wall_time_s"] = time.perf_counter() - wall_start
             epoch_logs.update(epoch_timing)
             update_resource_totals(self.resource_totals, epoch_timing)
+            if should_checkpoint and self.checkpoint_metric_logger is not None:
+                self.checkpoint_metric_logger(epoch_logs)
             tqdm.write(
                 "Epoch "
                 f"{epoch + 1}/{max_epochs} "
@@ -258,9 +258,6 @@ class ProPosTrainer:
         latest_path = self.checkpoint_dir / "latest.ckpt"
         atomic_torch_save(payload, epoch_path)
         copy_as_latest(epoch_path, latest_path)
-        prune_old_epoch_checkpoints(
-            self.checkpoint_dir, keep_last_n=self.keep_last_n_checkpoints
-        )
 
     def run_estep(self, epoch: int) -> None:
         self.model.eval()
@@ -585,7 +582,6 @@ class ProPosTrainer:
             "resource_totals": self.resource_totals,
             "eval_interval": self.eval_interval,
             "checkpoint_interval": self.checkpoint_interval,
-            "keep_last_n_checkpoints": self.keep_last_n_checkpoints,
             "profile_resources": self.profile_resources,
             "gloca_diagnostics_history": self.gloca_diagnostics_history,
             "gloca_alpha_initial": self.gloca_alpha_initial,

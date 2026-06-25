@@ -63,5 +63,4 @@ trainer:
   checkpoint_interval: 10
   eval_interval: checkpoint
   resume_from_checkpoint: auto
-  keep_last_n_checkpoints: 3
   profile_resources: true

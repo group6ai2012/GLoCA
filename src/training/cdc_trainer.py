@@ -26,7 +26,6 @@ from src.training.checkpointing import (
     capture_rng_state,
     copy_as_latest,
     empty_resource_totals,
-    prune_old_epoch_checkpoints,
     restore_rng_state,
     should_run_eval,
     should_save_epoch_checkpoint,
@@ -132,6 +131,7 @@ class CDCTrainer:
         device: torch.device,
         checkpoint_dir: Path | None = None,
         resume_from_checkpoint: Path | None = None,
+        checkpoint_metric_logger: Any | None = None,
     ) -> None:
         self.model = model.to(device)
         self.datamodule = datamodule
@@ -155,10 +155,8 @@ class CDCTrainer:
         self.checkpoint_dir = None if checkpoint_dir is None else Path(checkpoint_dir)
         self.checkpoint_interval = int(trainer_config.get("checkpoint_interval", 0))
         self.eval_interval = trainer_config.get("eval_interval", "checkpoint")
-        self.keep_last_n_checkpoints = int(
-            trainer_config.get("keep_last_n_checkpoints", 3)
-        )
         self.profile_resources = bool(trainer_config.get("profile_resources", True))
+        self.checkpoint_metric_logger = checkpoint_metric_logger
         self.start_epoch = 0
         self.resource_totals = empty_resource_totals()
         self.optimizer_cluster, self.optimizer_calibration = self._build_optimizers()
@@ -245,6 +243,8 @@ class CDCTrainer:
             epoch_timing["epoch_total_wall_time_s"] = time.perf_counter() - wall_start
             epoch_logs.update(epoch_timing)
             update_resource_totals(self.resource_totals, epoch_timing)
+            if should_checkpoint and run_eval and self.checkpoint_metric_logger is not None:
+                self.checkpoint_metric_logger(epoch_logs)
             if run_eval:
                 tqdm.write(
                     "Epoch "
@@ -340,9 +340,6 @@ class CDCTrainer:
         latest_path = self.checkpoint_dir / "latest.ckpt"
         atomic_torch_save(payload, epoch_path)
         copy_as_latest(epoch_path, latest_path)
-        prune_old_epoch_checkpoints(
-            self.checkpoint_dir, keep_last_n=self.keep_last_n_checkpoints
-        )
 
     @torch.no_grad()
     def initialize_head(self) -> None:
@@ -369,6 +366,10 @@ class CDCTrainer:
             kmeans_tol=float(self.cdc_config["kmeans_tol"]),
             seed=int(self.config["experiment"]["seed"]),
             orthogonalize=bool(self.cdc_config.get("orthogonalize_init", False)),
+            orthogonalize_epochs=int(
+                self.cdc_config.get("orthogonalize_epochs", 2000)
+            ),
+            orthogonalize_scale=float(self.cdc_config.get("orthogonalize_scale", 5.0)),
         )
 
     def train_epoch(
@@ -1034,7 +1035,6 @@ class CDCTrainer:
             "resource_totals": self.resource_totals,
             "eval_interval": self.eval_interval,
             "checkpoint_interval": self.checkpoint_interval,
-            "keep_last_n_checkpoints": self.keep_last_n_checkpoints,
             "profile_resources": self.profile_resources,
             "optimizer_cluster_groups": [
                 group.get("name", "") for group in self.optimizer_cluster.param_groups

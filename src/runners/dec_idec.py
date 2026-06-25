@@ -10,7 +10,7 @@ from src.data import ClusteringDataModule
 from src.evaluation import compute_clustering_metrics
 from src.evaluation.assignment_schema import DEC_IDEC_METRIC_FIELDS
 from src.experiments.config import save_experiment_config
-from src.experiments.outputs import write_outputs
+from src.experiments.outputs import append_csv_row, write_outputs
 from src.features import DINOv2Backbone
 from src.models.baselines.dec_idec import DINOCLSDECModel
 from src.runners.common import apply_runtime_settings, assert_backbone_frozen, finalize_run, prepare_runner_context
@@ -94,6 +94,34 @@ def run_dec_idec(config: dict[str, Any]) -> ExperimentResult:
         config.get("trainer", {}).get("resume_from_checkpoint", "auto"),
         checkpoint_dir,
     )
+
+    def log_checkpoint_metrics(phase_log: dict[str, Any]) -> None:
+        epoch = int(phase_log["epoch"])
+        phase = str(phase_log["phase"])
+        append_csv_row(
+            output_dir / "checkpoint_metrics.csv",
+            {
+                "experiment": config["experiment"]["name"],
+                "head": head_name,
+                "backbone": config["backbone"]["variant"],
+                "dataset": spec.name,
+                "seed": seed,
+                "gloca": "disabled",
+                "n_clusters": int(config["head"]["n_clusters"]),
+                "phase": phase,
+                "epoch": epoch,
+                "epoch_1based": epoch + 1,
+                "checkpoint": f"checkpoints/epoch_{phase}_{epoch + 1:04d}.ckpt",
+                "loss": float(phase_log.get("loss", float("nan"))),
+                "kl_loss": float(phase_log.get("kl_loss", float("nan"))),
+                "recon_loss": float(phase_log.get("recon_loss", float("nan"))),
+                "train_epoch_time_s": float(phase_log.get("phase_train_epoch_time_s", 0.0)),
+                "checkpoint_save_time_s": float(phase_log.get("checkpoint_save_time_s", 0.0)),
+                "eval_time_s": float(phase_log.get("eval_time_s", 0.0)),
+                "epoch_total_wall_time_s": float(phase_log.get("phase_epoch_total_wall_time_s", 0.0)),
+            },
+        )
+
     trainer = DECIDECTrainer(
         model=model,
         x=x,
@@ -105,6 +133,7 @@ def run_dec_idec(config: dict[str, Any]) -> ExperimentResult:
         labels=extracted["labels"],
         checkpoint_dir=checkpoint_dir,
         resume_from_checkpoint=resume_path,
+        checkpoint_metric_logger=log_checkpoint_metrics,
     )
 
     head_train_start = time.perf_counter()
@@ -186,6 +215,7 @@ def run_dec_idec(config: dict[str, Any]) -> ExperimentResult:
         "embedding_shape": list(latent.shape),
         "attention_shape": None,
         "num_workers": int(config["trainer"]["num_workers"]),
+        "checkpoint_metrics_path": "checkpoint_metrics.csv",
         **runtime_logs,
     }
     result = finalize_run(

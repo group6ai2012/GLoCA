@@ -54,6 +54,35 @@ class ProPosHead(nn.Module):
         self._freeze_target_projector()
         self.register_buffer("pseudo_labels", torch.empty(0, dtype=torch.long), persistent=True)
 
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ) -> None:
+        pseudo_labels_key = prefix + "pseudo_labels"
+        if pseudo_labels_key in state_dict:
+            checkpoint_labels = state_dict[pseudo_labels_key]
+            if self.pseudo_labels.shape != checkpoint_labels.shape:
+                self.pseudo_labels = torch.empty(
+                    checkpoint_labels.shape,
+                    dtype=checkpoint_labels.dtype,
+                    device=self.pseudo_labels.device,
+                )
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
+
     def _freeze_target_projector(self) -> None:
         for parameter in self.target_projector.parameters():
             parameter.requires_grad = False
@@ -136,7 +165,10 @@ class ProPosHead(nn.Module):
             target_buffer.copy_(online_buffer)
 
     def set_pseudo_labels(self, pseudo_labels: torch.Tensor) -> None:
-        self.pseudo_labels = pseudo_labels.detach().long().to(self.pseudo_labels.device)
+        labels = pseudo_labels.detach().long().to(self.pseudo_labels.device)
+        if self.pseudo_labels.shape != labels.shape:
+            self.pseudo_labels = torch.empty_like(labels, device=self.pseudo_labels.device)
+        self.pseudo_labels.copy_(labels)
 
     def batch_pseudo_labels(self, indices: torch.Tensor) -> torch.Tensor:
         if self.pseudo_labels.numel() == 0:
