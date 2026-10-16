@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import torch
 import torch.nn.functional as F
 from torch import nn
 
-from src.features.dinov2_backbone import DINOv2Backbone
+if TYPE_CHECKING:
+    from src.features.dinov2_backbone import DINOv2Backbone
 
 
 class ClusteringBaseModel(nn.Module):

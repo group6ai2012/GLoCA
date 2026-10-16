@@ -10,6 +10,7 @@ dataset:
 backbone:
   family: dinov2
   variant: facebook/dinov2-small
+  revision: ed25f3a31f01632728cabb09d1542f84ab7b0056
   freeze: true
   image_size: 224
 gloca:
@@ -62,6 +63,7 @@ prediction:
   export_embeddings: true
   export_attention: true
 trainer:
+  deterministic: true
   max_epochs: 1
   batch_size: 128
   lr: 1.0e-4

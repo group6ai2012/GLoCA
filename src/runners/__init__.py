@@ -1,7 +1,28 @@
-__all__ = ["run_cdc", "run_dec_idec", "run_kmeans", "run_propos"]
+__all__ = [
+    "run_cached_cls_gmm",
+    "run_cached_cls_hdbscan",
+    "run_cached_cls_mlp",
+    "run_cdc",
+    "run_dec_idec",
+    "run_cached_global_local_kmeans",
+    "run_kmeans",
+    "run_propos",
+]
 
 
 def __getattr__(name: str):
+    if name == "run_cached_cls_gmm":
+        from src.runners.cached_cls import run_cached_cls_gmm
+
+        return run_cached_cls_gmm
+    if name == "run_cached_cls_hdbscan":
+        from src.runners.cached_cls import run_cached_cls_hdbscan
+
+        return run_cached_cls_hdbscan
+    if name == "run_cached_cls_mlp":
+        from src.runners.cached_cls import run_cached_cls_mlp
+
+        return run_cached_cls_mlp
     if name == "run_cdc":
         from src.runners.cdc import run_cdc
 
@@ -10,6 +31,10 @@ def __getattr__(name: str):
         from src.runners.dec_idec import run_dec_idec
 
         return run_dec_idec
+    if name == "run_cached_global_local_kmeans":
+        from src.runners.global_local import run_cached_global_local_kmeans
+
+        return run_cached_global_local_kmeans
     if name == "run_kmeans":
         from src.runners.kmeans import run_kmeans
 

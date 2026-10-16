@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Any
+import random
+import numpy as np
 
 import torch
 from torch.utils.data import DataLoader
@@ -11,6 +13,23 @@ from src.data.transforms import (
     build_eval_transform,
     build_train_transform,
 )
+
+
+def seed_worker(worker_id: int) -> None:
+    seed = torch.initial_seed() % 2**32
+    random.seed(seed)
+    np.random.seed(seed)
+
+
+class EpochDataLoader(DataLoader):
+    """Reset loader randomness per epoch; workers are recreated on each iteration."""
+    def __init__(self, *args, seed: int, **kwargs):
+        self.seed = seed
+        super().__init__(*args, **kwargs)
+
+    def set_epoch(self, epoch: int) -> None:
+        self.generator.manual_seed((self.seed + int(epoch)) % 2**32)
+        self.dataset.epoch = int(epoch)
 
 
 class ClusteringDataModule:
@@ -26,6 +45,8 @@ class ClusteringDataModule:
         pin_memory: bool | None = None,
         persistent_workers: bool | None = None,
         prefetch_factor: int | None = None,
+        seed: int = 42,
+        deterministic: bool = True,
     ) -> None:
         if training_mode not in {"single_view", "contrastive_two_view", "cdc"}:
             raise ValueError(
@@ -44,6 +65,8 @@ class ClusteringDataModule:
                 f"got {training_views}"
             )
         self.spec = spec
+        self.seed = int(seed)
+        self.deterministic = deterministic
         self.image_size = image_size
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -51,7 +74,7 @@ class ClusteringDataModule:
         self.training_views = training_views
         self.cdc_augment_config = cdc_augment_config or {}
         self.pin_memory = pin_memory
-        self.persistent_workers = persistent_workers
+        self.persistent_workers = False if deterministic else persistent_workers
         self.prefetch_factor = prefetch_factor
         self.transform_backend = "pil"
         self.augmentation_name = (
@@ -73,6 +96,7 @@ class ClusteringDataModule:
                 self.spec,
                 transform=train_transform,
                 training_views=self.training_views,
+                seed=self.seed if self.deterministic else None,
             )
         if self.predict_dataset is None:
             self.predict_dataset = FolderImageDataset(
@@ -97,8 +121,9 @@ class ClusteringDataModule:
         self.setup("fit")
         assert self.train_dataset is not None
         kwargs = self._loader_kwargs(shuffle=True, pin_memory_default=torch.cuda.is_available())
-        return DataLoader(
+        return EpochDataLoader(
             self.train_dataset,
+            seed=self.seed,
             batch_size=self.batch_size,
             collate_fn=self._collate,
             **kwargs,
@@ -145,6 +170,9 @@ class ClusteringDataModule:
                 )
             ),
         }
+        if self.deterministic:
+            kwargs["generator"] = torch.Generator().manual_seed(self.seed if shuffle else (self.seed + 2**31) % 2**32)
+            kwargs["worker_init_fn"] = seed_worker
         if self.num_workers > 0 and self.prefetch_factor is not None:
             kwargs["prefetch_factor"] = int(self.prefetch_factor)
         return kwargs

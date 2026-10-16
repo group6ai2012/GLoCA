@@ -1,0 +1,104 @@
+experiment:
+  output_dir: outputs/cached_cls_baselines
+
+base_config:
+  dataset:
+    training_views: auto
+    limit_per_class:
+    include_classes:
+  backbone:
+    family: dinov2
+    variant: facebook/dinov2-small
+    revision: ed25f3a31f01632728cabb09d1542f84ab7b0056
+    freeze: true
+    image_size: 224
+  gloca:
+    enabled: false
+    name: disabled
+    embedding_dim: 384
+    normalize_output: true
+  head:
+    n_clusters: auto
+  prediction:
+    deterministic: true
+    export_embeddings: true
+    export_attention: false
+  trainer:
+    deterministic: true
+    max_epochs: 100
+    batch_size: 256
+    lr: 1.0e-3
+    accelerator: auto
+    precision: 32
+    matmul_precision: high
+    num_workers: 4
+    checkpoint_interval: 10
+    eval_interval: checkpoint
+    resume_from_checkpoint: auto
+    profile_resources: true
+
+sweep:
+  datasets: [plantvillage, plantseg]
+  seeds: [42]  # Other used seeds: 67, 69; use --seeds 42 67 69.
+  skip_existing: true
+  fail_fast: false
+  runs:
+    - name: gmm_cls
+      runner: cached_cls_gmm
+      expected:
+        head: gmm
+        gloca: disabled
+      config:
+        experiment:
+          name: gmm_cls
+        head:
+          name: gmm
+          n_clusters: auto
+          training_mode: cached_dino_cls
+        cached_baseline:
+          gmm_covariance_type: diag
+          gmm_init_params: k-means++
+          gmm_n_init: 3
+          gmm_max_iter: 300
+          gmm_tol: 1.0e-3
+          gmm_reg_covar: 1.0e-6
+
+    - name: hdbscan_cls
+      runner: cached_cls_hdbscan
+      expected:
+        head: hdbscan
+        gloca: disabled
+      config:
+        experiment:
+          name: hdbscan_cls
+        head:
+          name: hdbscan
+          n_clusters: inferred
+          training_mode: cached_dino_cls
+        cached_baseline:
+          hdbscan_min_cluster_size: 5
+          hdbscan_min_samples:
+          hdbscan_cluster_selection_epsilon: 0.0
+          hdbscan_metric: euclidean
+          hdbscan_algorithm: auto
+          hdbscan_leaf_size: 40
+          hdbscan_n_jobs: -1
+          hdbscan_cluster_selection_method: eom
+          hdbscan_allow_single_cluster: false
+
+    - name: supervised_mlp_cls
+      runner: cached_cls_mlp
+      expected:
+        head: supervised_mlp
+        gloca: disabled
+      config:
+        experiment:
+          name: supervised_mlp_cls
+        head:
+          name: supervised_mlp
+          n_clusters: auto
+          training_mode: cached_dino_cls
+        cached_baseline:
+          mlp_hidden_dims: [768, 384]
+          mlp_weight_decay: 1.0e-4
+          mlp_split_ratios: [0.70, 0.15, 0.15]

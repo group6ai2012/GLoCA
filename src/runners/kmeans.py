@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.experiments.reproducibility import record_run
+
 import time
 from copy import deepcopy
 from typing import Any
@@ -24,7 +26,8 @@ from src.evaluation import compute_clustering_metrics
 from src.utils import ExperimentResult, resolve_gloca_name
 
 
-def run_kmeans(config: dict[str, Any]) -> ExperimentResult:
+@record_run
+def run_kmeans(config: dict[str, Any], cache: dict[str, Any] | None = None) -> ExperimentResult:
     config = deepcopy(config)
     runtime_logs = apply_runtime_settings(config)
     ctx = prepare_runner_context(config, expected_head="kmeans")
@@ -36,20 +39,27 @@ def run_kmeans(config: dict[str, Any]) -> ExperimentResult:
     seed = ctx.seed
     if config["dataset"]["training_views"] == "auto":
         config["dataset"]["training_views"] = 1
-    datamodule = ClusteringDataModule(
-        spec=spec,
-        image_size=int(config["backbone"]["image_size"]),
-        batch_size=int(config["trainer"]["batch_size"]),
-        num_workers=int(config["trainer"]["num_workers"]),
-        training_mode="single_view",
-        training_views=config["dataset"]["training_views"],
-    )
-    backbone = DINOv2Backbone(
-        variant=config["backbone"]["variant"],
-        image_size=int(config["backbone"]["image_size"]),
-        freeze=bool(config["backbone"]["freeze"]),
-    )
-    assert_backbone_frozen(backbone)
+    if cache is None:
+        datamodule = ClusteringDataModule(
+            spec=spec,
+            image_size=int(config["backbone"]["image_size"]),
+            batch_size=int(config["trainer"]["batch_size"]),
+            num_workers=int(config["trainer"]["num_workers"]),
+            seed=int(config["experiment"]["seed"]),
+            deterministic=bool(config["trainer"].get("deterministic", True)),
+            training_mode="single_view",
+            training_views=config["dataset"]["training_views"],
+        )
+        backbone = DINOv2Backbone(
+            variant=config["backbone"]["variant"],
+            image_size=int(config["backbone"]["image_size"]),
+            freeze=bool(config["backbone"]["freeze"]),
+            revision=config["backbone"].get("revision"),
+        )
+        assert_backbone_frozen(backbone)
+    else:
+        backbone = cache["backbone"]
+
     adapter = build_adapter(config, input_dim=backbone.output_dim)
     gloca_name = resolve_gloca_name(config)
     baseline = config["baseline"]
@@ -59,13 +69,19 @@ def run_kmeans(config: dict[str, Any]) -> ExperimentResult:
     device = ctx.device
     total_start = time.perf_counter()
 
-    extracted = extract_deterministic_embeddings(
-        backbone=backbone,
-        adapter=adapter,
-        datamodule=datamodule,
-        device=device,
-        normalize_cls=normalize_cls,
-    )
+    if cache is None:
+        extracted = extract_deterministic_embeddings(
+            backbone=backbone,
+            adapter=adapter,
+            datamodule=datamodule,
+            device=device,
+            normalize_cls=normalize_cls,
+        )
+    else:
+        from src.experiments.reproducibility import validate_feature_cache
+        validate_feature_cache(config, cache, "cls")
+        extracted = cache
+
     embeddings = extracted["embeddings"]
 
     fit_start = time.perf_counter()
@@ -82,6 +98,8 @@ def run_kmeans(config: dict[str, Any]) -> ExperimentResult:
     )
     head_train_time_s = time.perf_counter() - fit_start
     total_time_s = time.perf_counter() - total_start
+    if cache is not None:
+        total_time_s += float(cache["cache_time_s"])
     assignments = kmeans_result["assignments"]
     clustered_embeddings = embeddings.float()
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.experiments.reproducibility import checkpoint_identity, validate_checkpoint
+
 from pathlib import Path
 from typing import Any
 import time
@@ -272,7 +274,8 @@ class DECIDECTrainer:
 
     def resumable_checkpoint_payload(self, phase: str, epoch: int) -> dict[str, Any]:
         return {
-            "checkpoint_version": 1,
+            "checkpoint_version": 2,
+            "reproducibility": checkpoint_identity(self.config),
             "method": self.mode,
             "phase": str(phase),
             "phase_epoch": int(epoch),
@@ -303,6 +306,7 @@ class DECIDECTrainer:
 
     def load_resumable_checkpoint(self, path: Path) -> None:
         ckpt = torch.load(path, map_location=self.device, weights_only=False)
+        validate_checkpoint(ckpt, self.config)
         if ckpt.get("method") != self.mode:
             raise ValueError(
                 f"Expected {self.mode.upper()} checkpoint, got {ckpt.get('method')!r}"

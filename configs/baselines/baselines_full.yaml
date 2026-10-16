@@ -10,6 +10,7 @@ base_config:
   backbone:
     family: dinov2
     variant: facebook/dinov2-small
+    revision: ed25f3a31f01632728cabb09d1542f84ab7b0056
     freeze: true
     image_size: 224
 
@@ -28,6 +29,7 @@ base_config:
     export_attention: true
 
   trainer:
+    deterministic: true
     max_epochs: 20
     batch_size: 128
     lr: 1.0e-4
@@ -42,7 +44,7 @@ base_config:
 
 sweep:
   datasets: [plantvillage, plantwild, plantseg]
-  seeds: [42, 69, 67]
+  seeds: [42]  # Other used seeds: 67, 69; use --seeds 42 67 69.
   skip_existing: true
   fail_fast: false
   runs:

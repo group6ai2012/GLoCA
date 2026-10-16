@@ -11,8 +11,12 @@ __all__ = [
     "CLSAdapter",
     "GLOCA_VARIATIONS",
     "GLoCAGatedAdapter",
+    "GLoCAMeanPoolAdapter",
+    "GLoCANoCLSResidualAdapter",
+    "GLoCANoPatchesAdapter",
     "GLoCASumAdapter",
     "GatedAttentionPooling",
+    "MeanPatchPooling",
     "SimpleAttentionPooling",
     "build_adapter",
     "init_identity_linear_if_possible",
@@ -43,6 +47,22 @@ class GatedAttentionPooling(nn.Module):
         scores = self.score(gated).squeeze(-1)
         attention = torch.softmax(scores, dim=1)
         pooled = torch.sum(attention.unsqueeze(-1) * patch_tokens, dim=1)
+        return pooled, attention
+
+
+class MeanPatchPooling(nn.Module):
+    def __init__(self, input_dim: int) -> None:
+        super().__init__()
+        self.input_dim = int(input_dim)
+
+    def forward(self, patch_tokens: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        batch_size, n_patches, input_dim = patch_tokens.shape
+        if n_patches == 0:
+            pooled = patch_tokens.new_zeros(batch_size, input_dim)
+            attention = patch_tokens.new_empty(batch_size, 0)
+            return pooled, attention
+        pooled = patch_tokens.mean(dim=1)
+        attention = patch_tokens.new_full((batch_size, n_patches), 1.0 / float(n_patches))
         return pooled, attention
 
 
@@ -207,10 +227,124 @@ class GLoCAGatedAdapter(nn.Module):
         return self._compute(cls=cls, patch_tokens=patch_tokens, patch_grid=patch_grid)
 
 
+class GLoCAMeanPoolAdapter(GLoCAGatedAdapter):
+    def __init__(
+        self,
+        input_dim: int,
+        embedding_dim: int,
+        normalize_output: bool = True,
+        attention_hidden_dim: int | None = None,
+        mlp_hidden_dim: int | None = None,
+        alpha_init: float = 0.0,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(
+            input_dim=input_dim,
+            embedding_dim=embedding_dim,
+            normalize_output=normalize_output,
+            attention_hidden_dim=attention_hidden_dim,
+            mlp_hidden_dim=mlp_hidden_dim,
+            alpha_init=alpha_init,
+            **kwargs,
+        )
+        self.patch_pool = MeanPatchPooling(input_dim)
+
+
+class GLoCANoPatchesAdapter(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        embedding_dim: int,
+        normalize_output: bool = True,
+        mlp_hidden_dim: int | None = None,
+        alpha_init: float = 0.0,
+        **_: Any,
+    ) -> None:
+        super().__init__()
+        self.cls_proj = nn.Linear(input_dim, embedding_dim)
+        self.cls_proj_identity_initialized = init_identity_linear_if_possible(self.cls_proj)
+        hidden_dim = mlp_hidden_dim or embedding_dim * 2
+        self.fusion_mlp = nn.Sequential(
+            nn.Linear(embedding_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, embedding_dim),
+        )
+        self.alpha = nn.Parameter(torch.tensor(float(alpha_init)))
+        self.normalize_output = bool(normalize_output)
+
+    def forward(
+        self,
+        cls: torch.Tensor,
+        patch_tokens: torch.Tensor,
+        patch_grid: tuple[int, int] | None = None,
+    ) -> dict[str, torch.Tensor | tuple[int, int] | None]:
+        computed = self._compute(cls=cls, patch_tokens=patch_tokens, patch_grid=patch_grid)
+        return {
+            "embedding": computed["embedding"],
+            "attention": computed["attention"],
+            "patch_grid": computed["patch_grid"],
+        }
+
+    def _compute(
+        self,
+        cls: torch.Tensor,
+        patch_tokens: torch.Tensor,
+        patch_grid: tuple[int, int] | None = None,
+    ) -> dict[str, torch.Tensor | tuple[int, int] | None]:
+        del patch_tokens
+        z_cls = self.cls_proj(cls)
+        delta = self.fusion_mlp(z_cls)
+        embedding = z_cls + self.alpha * delta
+        if self.normalize_output:
+            embedding = F.normalize(embedding, dim=-1)
+        return {
+            "embedding": embedding,
+            "attention": None,
+            "patch_grid": patch_grid,
+            "z_cls": z_cls,
+            "delta": delta,
+        }
+
+    def diagnostics(
+        self,
+        cls: torch.Tensor,
+        patch_tokens: torch.Tensor,
+        patch_grid: tuple[int, int] | None = None,
+    ) -> dict[str, torch.Tensor | tuple[int, int] | None]:
+        return self._compute(cls=cls, patch_tokens=patch_tokens, patch_grid=patch_grid)
+
+
+class GLoCANoCLSResidualAdapter(GLoCAGatedAdapter):
+    def _compute(
+        self,
+        cls: torch.Tensor,
+        patch_tokens: torch.Tensor,
+        patch_grid: tuple[int, int] | None = None,
+    ) -> dict[str, torch.Tensor | tuple[int, int] | None]:
+        z_cls = self.cls_proj(cls)
+        pooled, attention = self.patch_pool(patch_tokens)
+        z_patch = self.patch_proj(pooled)
+        delta = self.fusion_mlp(torch.cat([z_cls, z_patch], dim=-1))
+        embedding = delta
+        if self.normalize_output:
+            embedding = F.normalize(embedding, dim=-1)
+        return {
+            "embedding": embedding,
+            "attention": attention,
+            "patch_grid": patch_grid,
+            "z_cls": z_cls,
+            "z_patch": z_patch,
+            "delta": delta,
+        }
+
+
 ADAPTERS = {
     "cls": CLSAdapter,
     "gloca_sum": GLoCASumAdapter,
     "gloca_gated": GLoCAGatedAdapter,
+    "gloca_mean_pool": GLoCAMeanPoolAdapter,
+    "gloca_no_patches": GLoCANoPatchesAdapter,
+    "gloca_no_cls_residual": GLoCANoCLSResidualAdapter,
 }
 
 GLOCA_VARIATIONS = set(ADAPTERS)

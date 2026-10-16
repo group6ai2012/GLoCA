@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.experiments.reproducibility import checkpoint_identity, validate_checkpoint
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -203,6 +205,8 @@ class CDCTrainer:
             return
 
         for epoch in range(self.start_epoch, max_epochs):
+            if hasattr(train_loader, "set_epoch") and self.config["trainer"].get("deterministic", True):
+                train_loader.set_epoch(epoch)
             wall_start = time.perf_counter()
             epoch_timing: dict[str, float] = {}
             self.maybe_update_gloca_freeze_state(epoch)
@@ -232,12 +236,12 @@ class CDCTrainer:
             epoch_logs["evaluated"] = bool(run_eval)
             epoch_logs["checkpoint_saved"] = bool(should_checkpoint)
             self.epoch_history.append(epoch_logs)
-            if should_checkpoint:
-                with timed_section(epoch_timing, "checkpoint_save_time_s"):
-                    self.save_epoch_checkpoint(epoch)
             if run_eval:
                 with timed_section(epoch_timing, "eval_time_s"):
                     epoch_logs.update(self.evaluate_epoch_metrics())
+            if should_checkpoint:
+                with timed_section(epoch_timing, "checkpoint_save_time_s"):
+                    self.save_epoch_checkpoint(epoch)
             epoch_timing.setdefault("checkpoint_save_time_s", 0.0)
             epoch_timing.setdefault("eval_time_s", 0.0)
             epoch_timing["epoch_total_wall_time_s"] = time.perf_counter() - wall_start
@@ -268,7 +272,8 @@ class CDCTrainer:
 
     def resumable_checkpoint_payload(self, epoch: int) -> dict[str, Any]:
         return {
-            "checkpoint_version": 1,
+            "checkpoint_version": 2,
+            "reproducibility": checkpoint_identity(self.config),
             "method": "cdc",
             "epoch": int(epoch),
             "next_epoch": int(epoch) + 1,
@@ -299,6 +304,7 @@ class CDCTrainer:
 
     def load_resumable_checkpoint(self, path: Path) -> None:
         ckpt = torch.load(path, map_location=self.device, weights_only=False)
+        validate_checkpoint(ckpt, self.config)
         if ckpt.get("method") != "cdc":
             raise ValueError(f"Expected CDC checkpoint, got {ckpt.get('method')!r}")
         self.model.load_state_dict(ckpt["model_state_dict"])

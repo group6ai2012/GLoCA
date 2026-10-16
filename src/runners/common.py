@@ -27,9 +27,11 @@ class RunnerContext:
 
 
 def apply_runtime_settings(config: dict[str, Any]) -> dict[str, Any]:
-    trainer_config = config.get("trainer") or {}
+    trainer_config = config.setdefault("trainer", {})
     if not isinstance(trainer_config, dict):
         raise ValueError("trainer must be a mapping when applying runtime settings.")
+    if trainer_config.get("deterministic", True) and trainer_config.get("matmul_precision") is None:
+        trainer_config["matmul_precision"] = "highest"
     matmul_precision = trainer_config.get("matmul_precision")
     if matmul_precision is not None:
         allowed = {"highest", "high", "medium"}
@@ -39,9 +41,38 @@ def apply_runtime_settings(config: dict[str, Any]) -> dict[str, Any]:
                 f"{sorted(allowed)} or null, got {matmul_precision!r}"
             )
         torch.set_float32_matmul_precision(matmul_precision)
+    deterministic = trainer_config.setdefault("deterministic", True)
+    if not isinstance(deterministic, bool):
+        raise ValueError("trainer.deterministic must be a boolean")
+    if config.get("backbone", {}).get("variant") == "facebook/dinov2-small":
+        from src.features.dinov2 import DINOV2_SMALL_REVISION
+        config["backbone"]["revision"] = config["backbone"].get("revision") or DINOV2_SMALL_REVISION
+    if deterministic and config.get("backbone"):
+        import re
+        if not re.fullmatch(r"[0-9a-f]{40}", str(config["backbone"].get("revision", ""))):
+            raise ValueError("Strict experiments require an immutable 40-character backbone.revision")
+    if deterministic and config.get("cached_baseline", {}).get("hdbscan_n_jobs") is not None:
+        config["cached_baseline"]["hdbscan_n_jobs"] = 1
+    if deterministic:
+        import os
+        if torch.cuda.is_initialized() and os.environ.get("CUBLAS_WORKSPACE_CONFIG") not in {":4096:8", ":16:8"}:
+            raise RuntimeError("Set CUBLAS_WORKSPACE_CONFIG=:4096:8 before initializing CUDA")
+    from src.experiments.cli import bootstrap
+    bootstrap()
+    if deterministic:
+        trainer_config["persistent_workers"] = False
+        torch.set_num_threads(1)
+        from threadpoolctl import threadpool_limits
+        threadpool_limits(limits=1)
+    torch.use_deterministic_algorithms(deterministic)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = deterministic
     return {
         "matmul_precision": matmul_precision,
         "runtime_settings_applied": matmul_precision is not None,
+        "deterministic": deterministic,
+        "torch_threads": torch.get_num_threads(),
+        "persistent_workers": trainer_config.get("persistent_workers"),
     }
 
 

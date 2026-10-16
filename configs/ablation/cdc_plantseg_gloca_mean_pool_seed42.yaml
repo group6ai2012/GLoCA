@@ -1,10 +1,11 @@
 experiment:
-  name: base
-  seed: 69
-  output_dir: outputs/main_experiments
+  name: gloca_mean_pool
+  seed: 42  # Other used seeds: 67, 69; override with --seed.
+  output_dir: outputs/ablation_studies
 
 dataset:
   name: plantseg
+  manifest: data/manifests/plantseg.json
   limit_per_class:
   include_classes:
   training_views: cdc_weak_strong_calibration
@@ -12,14 +13,18 @@ dataset:
 backbone:
   family: dinov2
   variant: facebook/dinov2-small
+  revision: ed25f3a31f01632728cabb09d1542f84ab7b0056
   freeze: true
   image_size: 224
 
 gloca:
-  enabled: false
-  name: disabled
+  enabled: true
+  name: gloca_mean_pool
   embedding_dim: 384
+  alpha_init: 0.0
   normalize_output: true
+  attention_hidden_dim: 384
+  mlp_hidden_dim: 768
 
 head:
   name: cdc
@@ -48,7 +53,7 @@ cdc:
   gloca_alpha_lr_multiplier: 1.0
   freeze_gloca: false
   freeze_gloca_epochs: 0
-  log_gloca_diagnostics: false
+  log_gloca_diagnostics: true
   progress: true
   augment:
     weak:
@@ -68,6 +73,8 @@ prediction:
   export_attention: true
 
 trainer:
+
+  deterministic: true
   max_epochs: 200
   batch_size: 256
   lr: 1.0e-4
@@ -76,7 +83,7 @@ trainer:
   matmul_precision: high
   num_workers: 4
   pin_memory: true
-  persistent_workers: true
+  persistent_workers: false
   checkpoint_interval: 10
   eval_interval: checkpoint
   resume_from_checkpoint: auto

@@ -1,11 +1,12 @@
 # Used by sweep/diagnostic scripts for report roots; single-run scripts use experiment directly.
 experiment:
   name:
-  seed:
+  seed: 42  # Override with --seed; other used seeds are documented per recipe.
   output_dir:
 
 # Used by all dataset-backed runners.
 dataset:
+  manifest:  # Optional versioned content manifest.
   name:
   root:
   limit_per_class:
@@ -16,6 +17,7 @@ dataset:
 backbone:
   family:
   variant:
+  revision:  # Immutable HuggingFace commit.
   freeze:
   image_size:
 
@@ -37,6 +39,8 @@ head:
 
 # Used by K-Means, DEC, and IDEC baseline runners.
 baseline:
+  embedding_source:
+  normalize_embedding:
   spherical:
   kmeans_init:
   kmeans_n_init:
@@ -52,6 +56,27 @@ baseline:
   lambda_recon:
   alpha:
   target_update_interval:
+
+# Used by cached-CLS runners through scripts/run_baselines.py.
+cached_baseline:
+  gmm_covariance_type:
+  gmm_init_params:
+  gmm_n_init:
+  gmm_max_iter:
+  gmm_tol:
+  gmm_reg_covar:
+  hdbscan_min_cluster_size:
+  hdbscan_min_samples:
+  hdbscan_cluster_selection_epsilon:
+  hdbscan_metric:
+  hdbscan_algorithm:
+  hdbscan_leaf_size:
+  hdbscan_n_jobs:
+  hdbscan_cluster_selection_method:
+  hdbscan_allow_single_cluster:
+  mlp_hidden_dims:
+  mlp_weight_decay:
+  mlp_split_ratios:
 
 # Used by ProPos runner and ProPos diagnostics.
 propos:
@@ -128,6 +153,7 @@ prediction:
 
 # Used by dataloaders/training.
 trainer:
+  deterministic: true
   max_epochs:
   batch_size:
   lr:
@@ -150,6 +176,7 @@ base_config:
   backbone:
     family:
     variant:
+    revision:  # Immutable HuggingFace commit.
     freeze:
     image_size:
   gloca:
@@ -164,6 +191,7 @@ base_config:
     export_embeddings:
     export_attention:
   trainer:
+    deterministic: true
     max_epochs:
     batch_size:
     lr:
@@ -177,7 +205,7 @@ base_config:
 
 sweep:
   datasets:
-  seeds:
+  seeds: [42]  # Override with --seed N or --seeds 42 67 69.
   skip_existing:
   fail_fast:
   runs:

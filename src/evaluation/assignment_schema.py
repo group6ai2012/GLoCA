@@ -64,6 +64,35 @@ DEC_IDEC_METRIC_FIELDS = [
     "target_update_interval",
 ]
 
+CACHED_CLS_METRIC_FIELDS = [
+    "reference_n_classes",
+    "n_discovered_clusters",
+    "noise_count",
+    "noise_fraction",
+    "mean_membership_probability",
+    "classification_accuracy",
+    "balanced_accuracy",
+    "macro_f1",
+    "test_loss",
+    "best_epoch",
+    "best_val_accuracy",
+    "best_val_loss",
+    "train_n_images",
+    "validation_n_images",
+    "test_n_images",
+    "trainable_parameter_count",
+    "evaluation_split",
+]
+
+GLOBAL_LOCAL_METRIC_FIELDS = [
+    "embedding_source",
+    "patch_pooling",
+    "feature_fusion",
+    "final_embedding_normalized",
+    "embedding_dim",
+    "trainable_parameter_count",
+]
+
 AGGREGATE_METRIC_FIELDS = [
     "backbone",
     "gloca",

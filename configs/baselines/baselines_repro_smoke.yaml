@@ -1,0 +1,312 @@
+experiment:
+  output_dir: outputs/reproducibility_smoke/baselines
+base_config:
+  dataset:
+    training_views: auto
+    limit_per_class: 3
+    include_classes:
+    - apple_black_rot
+    - apple_mosaic_virus
+  backbone:
+    family: dinov2
+    variant: facebook/dinov2-small
+    revision: ed25f3a31f01632728cabb09d1542f84ab7b0056
+    freeze: true
+    image_size: 224
+  gloca:
+    enabled: false
+    name: disabled
+    embedding_dim: 384
+    normalize_output: true
+  head:
+    n_clusters: auto
+  prediction:
+    deterministic: true
+    export_embeddings: true
+    export_attention: true
+  trainer:
+    deterministic: true
+    max_epochs: 1
+    batch_size: 6
+    lr: 0.0001
+    accelerator: auto
+    precision: 32
+    matmul_precision: high
+    num_workers: 0
+    checkpoint_interval: 1
+    eval_interval: checkpoint
+    resume_from_checkpoint: null
+    profile_resources: true
+sweep:
+  datasets:
+  - plantseg
+  seeds: [42]  # Other used seeds: 67, 69; use --seeds 42 67 69.
+  skip_existing: true
+  fail_fast: true
+  runs:
+  - name: kmeans_cls
+    runner: kmeans
+    expected:
+      head: kmeans
+      gloca: disabled
+    config:
+      experiment:
+        name: kmeans_cls
+      head:
+        name: kmeans
+        training_mode: single_view
+      gloca:
+        enabled: false
+        name: disabled
+      baseline:
+        spherical: false
+        kmeans_init: kmeans++
+        kmeans_n_init: 1
+        kmeans_max_iter: 4
+        kmeans_tol: 0.0001
+  - name: spherical_kmeans_cls
+    runner: kmeans
+    expected:
+      head: spherical_kmeans
+      gloca: disabled
+    config:
+      experiment:
+        name: spherical_kmeans_cls
+      head:
+        name: kmeans
+        training_mode: single_view
+      gloca:
+        enabled: false
+        name: disabled
+      baseline:
+        spherical: true
+        kmeans_init: kmeans++
+        kmeans_n_init: 1
+        kmeans_max_iter: 4
+        kmeans_tol: 0.0001
+  - name: kmeans_gloca_gated_untrained
+    runner: kmeans
+    expected:
+      head: spherical_kmeans
+      gloca: gloca_gated
+    config:
+      experiment:
+        name: kmeans_gloca_gated_untrained
+      head:
+        name: kmeans
+        training_mode: single_view
+      gloca:
+        enabled: true
+        name: gloca_gated
+        embedding_dim: 384
+        alpha_init: 0.0
+        normalize_output: true
+      baseline:
+        spherical: true
+        kmeans_init: kmeans++
+        kmeans_n_init: 1
+        kmeans_max_iter: 4
+        kmeans_tol: 0.0001
+  - name: dec_cls
+    runner: dec_idec
+    expected:
+      head: dec
+      gloca: disabled
+    config:
+      experiment:
+        name: dec_cls
+      head:
+        name: dec
+        training_mode: cached_dino_cls
+      gloca:
+        enabled: false
+        name: disabled
+      baseline:
+        kmeans_init: kmeans++
+        kmeans_n_init: 1
+        kmeans_max_iter: 4
+        kmeans_tol: 0.0001
+        input_dim: 384
+        hidden_dims:
+        - 8
+        latent_dim: 4
+        pretrain_epochs: 1
+        refine_epochs: 1
+        pretrain_lr: 0.001
+        refine_lr: 0.0001
+        lambda_recon: 0.0
+        alpha: 1.0
+        target_update_interval: null
+  - name: idec_cls
+    runner: dec_idec
+    expected:
+      head: idec
+      gloca: disabled
+    config:
+      experiment:
+        name: idec_cls
+      head:
+        name: idec
+        training_mode: cached_dino_cls
+      gloca:
+        enabled: false
+        name: disabled
+      baseline:
+        kmeans_init: kmeans++
+        kmeans_n_init: 1
+        kmeans_max_iter: 4
+        kmeans_tol: 0.0001
+        input_dim: 384
+        hidden_dims:
+        - 8
+        latent_dim: 4
+        pretrain_epochs: 1
+        refine_epochs: 1
+        pretrain_lr: 0.001
+        refine_lr: 0.0001
+        lambda_recon: 0.1
+        alpha: 1.0
+        target_update_interval: null
+  - name: gmm_cls
+    runner: cached_cls_gmm
+    expected:
+      head: gmm
+      gloca: disabled
+    config:
+      backbone:
+        family: dinov2
+        variant: facebook/dinov2-small
+        revision: ed25f3a31f01632728cabb09d1542f84ab7b0056
+        freeze: true
+        image_size: 224
+      gloca:
+        enabled: false
+        name: disabled
+        embedding_dim: 384
+        normalize_output: true
+      head:
+        n_clusters: auto
+        name: gmm
+        training_mode: cached_dino_cls
+      prediction:
+        deterministic: true
+        export_embeddings: true
+        export_attention: false
+      experiment:
+        name: gmm_cls
+      cached_baseline:
+        gmm_covariance_type: diag
+        gmm_init_params: k-means++
+        gmm_n_init: 1
+        gmm_max_iter: 4
+        gmm_tol: 0.001
+        gmm_reg_covar: 1.0e-06
+  - name: hdbscan_cls
+    runner: cached_cls_hdbscan
+    expected:
+      head: hdbscan
+      gloca: disabled
+    config:
+      backbone:
+        family: dinov2
+        variant: facebook/dinov2-small
+        revision: ed25f3a31f01632728cabb09d1542f84ab7b0056
+        freeze: true
+        image_size: 224
+      gloca:
+        enabled: false
+        name: disabled
+        embedding_dim: 384
+        normalize_output: true
+      head:
+        n_clusters: inferred
+        name: hdbscan
+        training_mode: cached_dino_cls
+      prediction:
+        deterministic: true
+        export_embeddings: true
+        export_attention: false
+      experiment:
+        name: hdbscan_cls
+      cached_baseline:
+        hdbscan_min_cluster_size: 2
+        hdbscan_min_samples: null
+        hdbscan_cluster_selection_epsilon: 0.0
+        hdbscan_metric: euclidean
+        hdbscan_algorithm: auto
+        hdbscan_leaf_size: 40
+        hdbscan_n_jobs: -1
+        hdbscan_cluster_selection_method: eom
+        hdbscan_allow_single_cluster: false
+  - name: supervised_mlp_cls
+    runner: cached_cls_mlp
+    expected:
+      head: supervised_mlp
+      gloca: disabled
+    config:
+      backbone:
+        family: dinov2
+        variant: facebook/dinov2-small
+        revision: ed25f3a31f01632728cabb09d1542f84ab7b0056
+        freeze: true
+        image_size: 224
+      gloca:
+        enabled: false
+        name: disabled
+        embedding_dim: 384
+        normalize_output: true
+      head:
+        n_clusters: auto
+        name: supervised_mlp
+        training_mode: cached_dino_cls
+      prediction:
+        deterministic: true
+        export_embeddings: true
+        export_attention: false
+      experiment:
+        name: supervised_mlp_cls
+      cached_baseline:
+        mlp_hidden_dims:
+        - 8
+        - 4
+        mlp_weight_decay: 0.0001
+        mlp_split_ratios:
+        - 0.7
+        - 0.15
+        - 0.15
+  - name: kmeans_cls_mean_patch_concat
+    runner: global_local_kmeans
+    expected:
+      head: kmeans
+      gloca: disabled
+      embedding_source: cls_mean_patch_concat
+    config:
+      backbone:
+        family: dinov2
+        variant: facebook/dinov2-small
+        revision: ed25f3a31f01632728cabb09d1542f84ab7b0056
+        freeze: true
+        image_size: 224
+      gloca:
+        enabled: false
+        name: disabled
+        embedding_dim: 384
+        normalize_output: true
+      head:
+        n_clusters: auto
+        name: kmeans
+        training_mode: single_view
+      prediction:
+        deterministic: true
+        export_embeddings: true
+        export_attention: false
+      experiment:
+        name: kmeans_cls_mean_patch_concat
+      baseline:
+        embedding_source: cls_mean_patch_concat
+        normalize_embedding: true
+        spherical: false
+        kmeans_init: kmeans++
+        kmeans_n_init: 1
+        kmeans_max_iter: 4
+        kmeans_tol: 0.0001

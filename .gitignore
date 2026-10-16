@@ -15,4 +15,5 @@ AGENTS.md
 EXPERIMENTS.md
 /notebooks
 /scripts/run_propos_gloca_diagnostic.py
-/tests
+/.agents
+# Test sources and data/manifests are versioned.

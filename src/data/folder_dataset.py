@@ -3,6 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+import hashlib
+import random
+
+import numpy as np
+import torch
 
 from PIL import Image
 from torch.utils.data import Dataset
@@ -46,6 +51,7 @@ class FolderImageDataset(Dataset):
         spec: DatasetSpec,
         transform: Callable | dict[str, Callable] | None = None,
         training_views: int | str = 1,
+        seed: int | None = None,
     ) -> None:
         if training_views not in {1, 2, "cdc_weak_strong_calibration"}:
             raise ValueError(
@@ -53,6 +59,8 @@ class FolderImageDataset(Dataset):
                 f"got {training_views}"
             )
         self.spec = spec
+        self.seed = seed
+        self.epoch = 0
         self.transform = transform
         self.training_views = training_views
         self.records = self._build_records()
@@ -63,7 +71,7 @@ class FolderImageDataset(Dataset):
 
     def _build_records(self) -> list[SampleRecord]:
         class_dirs = [p for p in self.spec.root.iterdir() if p.is_dir()]
-        class_dirs = sorted(class_dirs, key=lambda p: p.name.lower())
+        class_dirs = sorted(class_dirs, key=lambda p: (p.name.lower(), p.name))
         if self.spec.include_classes is not None:
             allowed = set(self.spec.include_classes)
             class_dirs = [p for p in class_dirs if p.name in allowed]
@@ -75,7 +83,7 @@ class FolderImageDataset(Dataset):
         for class_dir in class_dirs:
             image_paths = [
                 path
-                for path in sorted(class_dir.rglob("*"), key=lambda p: str(p).lower())
+                for path in sorted(class_dir.rglob("*"), key=lambda p: (p.as_posix().lower(), p.as_posix()))
                 if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS
             ]
             if self.spec.limit_per_class is not None:
@@ -98,6 +106,23 @@ class FolderImageDataset(Dataset):
         return len(self.records)
 
     def __getitem__(self, index: int) -> dict:
+        if self.seed is None:
+            return self._get_item(index)
+        # Sample/epoch seeds keep augmentations independent of model and worker RNG.
+        value = f"{self.seed}:{self.epoch}:{index}".encode()
+        seed = int.from_bytes(hashlib.sha256(value).digest()[:4], "little")
+        state = (random.getstate(), np.random.get_state(), torch.get_rng_state())
+        try:
+            random.seed(seed)
+            np.random.seed(seed)
+            torch.random.default_generator.manual_seed(seed)
+            return self._get_item(index)
+        finally:
+            random.setstate(state[0])
+            np.random.set_state(state[1])
+            torch.set_rng_state(state[2])
+
+    def _get_item(self, index: int) -> dict:
         record = self.records[index]
         with Image.open(record.path) as image:
             image = image.convert("RGB")

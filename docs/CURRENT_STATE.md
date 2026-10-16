@@ -52,6 +52,9 @@ src/
     config.py
     outputs.py
     registry.py
+    baselines.py
+    cli.py
+    reproducibility.py
 
   features/
     dinov2.py
@@ -62,7 +65,9 @@ src/
     gloca.py
 
     baselines/
+      cached_cls.py
       dec_idec.py
+      global_local.py
 
     clustering/
       base.py
@@ -71,15 +76,18 @@ src/
       propos.py
 
   runners/
+    cached_cls.py
     common.py
     cdc.py
     dec_idec.py
     diagnostics.py
     embedding_export.py
+    global_local.py
     kmeans.py
     propos.py
 
   training/
+    cached_cls_trainer.py
     checkpointing.py
     cdc_trainer.py
     dec_idec_trainer.py
@@ -90,10 +98,13 @@ src/
 scripts/
   prepare_plantseg_folder_dataset.py
   run_baselines.py
+  build_dataset_manifest.py
   run_cdc.py
   run_propos.py
   run_propos_gloca_diagnostics.py
   visualize_gloca_attention.py
+
+streamlit_app.py
 ```
 
 The supported script entry points are YAML-driven:
@@ -104,9 +115,10 @@ python scripts/run_cdc.py <config_path>
 python scripts/run_propos.py <config_path>
 python scripts/run_propos_gloca_diagnostics.py <config_path>
 python scripts/visualize_gloca_attention.py --run-dir <run_dir> --dataset <name> --n-per-class <n>
+conda run -n XDC python -m streamlit run streamlit_app.py
 ```
 
-`scripts/run_baselines.py`, `scripts/run_cdc.py`, `scripts/run_propos.py`, and `scripts/run_propos_gloca_diagnostics.py` each parse one positional YAML config path.
+`scripts/run_baselines.py`, `scripts/run_cdc.py`, `scripts/run_propos.py`, and `scripts/run_propos_gloca_diagnostics.py` each accept one positional YAML config path plus optional `--seed N`. Baselines also accept mutually exclusive `--seeds N N ...`. Overrides replace configured seeds before execution and are saved in every run artifact. Training settings otherwise remain YAML-defined.
 
 ## Configuration
 
@@ -148,6 +160,9 @@ configs/cdc/cdc_plantwild_cls_smoke.yaml
 configs/cdc/cdc_plantwild_gloca_gated_smoke.yaml
 configs/cdc/cdc_plantwild_cls_seed42.yaml
 configs/cdc/cdc_plantwild_gloca_gated_seed42.yaml
+configs/cdc/cdc_plantseg_gloca_mean_pool_seed42.yaml
+configs/cdc/cdc_plantseg_gloca_no_patches_seed42.yaml
+configs/cdc/cdc_plantseg_gloca_no_cls_residual_seed42.yaml
 ```
 
 Runtime settings include `trainer.matmul_precision`, accepted values `highest`, `high`, `medium`, or null, and `trainer.num_workers` for dataloader throughput. Trainable runners also support resumable checkpointing fields:
@@ -302,6 +317,9 @@ Implemented adapter names:
 cls
 gloca_sum
 gloca_gated
+gloca_mean_pool
+gloca_no_patches
+gloca_no_cls_residual
 ```
 
 Direct DINO CLS is represented in config by:
@@ -340,6 +358,14 @@ h = normalize(z_cls + alpha * delta)
 `alpha` is a learnable scalar initialized from config, commonly `0.0`. Attention tensors use shape `[B, N]`. The adapter exposes a `diagnostics()` method that also returns `z_cls`, `z_patch`, and `delta`.
 
 Tests assert that `gloca_gated` with `alpha_init: 0.0` and matching input/output dimensions preserves normalized CLS closely at initialization, while `alpha` still receives gradients.
+
+The implemented GLoCA ablation adapters are method-independent and live beside the main adapter:
+
+```text
+gloca_mean_pool          # gated attention pooling replaced by mean pooling
+gloca_no_patches         # patch branch removed; CLS-only correction
+gloca_no_cls_residual    # residual CLS output path removed; h = normalize(delta)
+```
 
 ## Shared Model Composition
 
@@ -578,6 +604,16 @@ cdc_refine_epochs
 cdc_init_mode
 ```
 
+CDC PlantSeg seed-42 GLoCA ablation configs are checked in for the main ablation setup:
+
+```text
+configs/cdc/cdc_plantseg_gloca_mean_pool_seed42.yaml
+configs/cdc/cdc_plantseg_gloca_no_patches_seed42.yaml
+configs/cdc/cdc_plantseg_gloca_no_cls_residual_seed42.yaml
+```
+
+These configs keep the existing PlantSeg CDC `gloca_gated` seed-42 schedule and change only the experiment output naming and `gloca.name`.
+
 Checked smoke commands:
 
 ```text
@@ -586,6 +622,25 @@ python scripts/run_cdc.py configs/cdc/cdc_plantwild_gloca_gated_smoke.yaml
 ```
 
 Both checked smoke runs complete end-to-end and write canonical outputs. In the smoke subset, prototype initialization falls back to random because `n_samples=230` is smaller than `hidden_dim=512`. The one-epoch smoke runs produce finite confidence tensors and non-collapsed assignment IDs, but they are not research-result runs.
+
+## Local CDC + GLoCA Streamlit App
+
+`streamlit_app.py` provides local, single-image inference for the main seed-42
+`CDC + gloca_gated` PlantSeg and PlantVillage runs. It restores each run's
+`checkpoints/latest.ckpt`, uses deterministic prediction preprocessing, and reports
+the calibration head's top 1–10 cluster probabilities.
+
+For every displayed cluster, the app shows five original-dataset exemplars. The
+exemplars are selected by passing the saved final GLoCA embeddings through the
+restored CDC calibration head and ranking every dataset image by its probability
+for that individual cluster. This permits representative examples even for a
+cluster with no final argmax assignments.
+
+The app is a research explorer, not a disease classifier. Cluster IDs are anonymous,
+and calibrated cluster probabilities must not be presented as disease diagnosis
+confidence. Local artifacts and the original PlantSeg/PlantVillage folder datasets
+must remain available. Usage and artifact prerequisites are documented in
+`docs/CDC_STREAMLIT_APP.md`.
 
 ## ProPos/GLoCA Diagnostics
 
@@ -655,44 +710,81 @@ It maps attention through the repository's deterministic eval resize/center-crop
 
 ## Baseline Sweep
 
-The baseline sweep entry point is:
+`python scripts/run_baselines.py <config_path> [--seed N | --seeds N N ...]`
+is the sole baseline entry point. Shared orchestration lives in
+`src/experiments/baselines.py`; the separate cached-CLS and global-local scripts
+have been removed. Existing baseline recipe schemas and runner identifiers remain
+accepted. Runnable recipes default to seed 42; other used seeds are documented in
+YAML comments and selected explicitly with the CLI overrides.
 
-```text
-scripts/run_baselines.py
-```
+`configs/baselines/baselines_unified.yaml` includes K-Means, spherical K-Means,
+untrained GLoCA plus spherical K-Means, DEC, IDEC, GMM, HDBSCAN, supervised MLP,
+and fixed CLS-plus-mean-patch K-Means on PlantVillage and PlantSeg. The original
+baseline recipe files remain usable through the same command. PlantWild remains
+smoke/debug or historical context only.
 
-`configs/baselines/baselines_full.yaml` defines:
+The fixed global-local baseline computes
+`normalize(concat(CLS, mean(patch tokens)))` without learned parameters. It retains
+`head: kmeans`, `gloca: disabled`, and `embedding_source: cls_mean_patch_concat`.
+The supervised MLP retains deterministic 70/15/15 stratified splits, class-weighted
+training, validation-selected weights, and test-split-only canonical evaluation.
+It is a supervised reference, not unsupervised evidence for GLoCA. HDBSCAN retains
+its explicit nonnegative noise-cluster remapping.
 
-```text
-datasets: plantvillage, plantwild, plantseg
-seeds: 42, 69, 67
-runs:
-  kmeans_cls
-  spherical_kmeans_cls
-  kmeans_gloca_gated_untrained
-  dec_cls
-  idec_cls
-```
+Compatible frozen features are shared in memory using dataset content, backbone
+revision, feature construction, preprocessing, batch size, workers, and numerical
+runtime settings. Untrained GLoCA features are not shared across seeds.
 
-Although the checked-in full baseline sweep still includes PlantWild, PlantWild rows are smoke/debug or legacy context only. The main reported baseline comparisons should use PlantVillage and PlantSeg.
+Every invocation writes `baseline_summary.csv` and `baseline_summary_agg.csv`.
+Summaries cover that invocation, including skipped runs; use `--seeds` to aggregate
+multiple seeds together. Grouping includes baseline name, embedding source, and
+evaluation split as well as backbone, GLoCA, head, and dataset. Supervised metrics
+and method diagnostics are appended to canonical columns. A failed run is written
+to the summary and produces a nonzero exit status, including with fail-fast off.
 
-`configs/baselines/baselines_smoke.yaml` defines a PlantWild seed-42 smoke sweep with two K-Means runs and `limit_per_class: 2`.
+Legacy expanded output locations are preserved: K-Means/DEC/IDEC sweeps include
+the existing dataset/seed prefix in `experiment.output_dir`; cached-CLS and
+global-local sweeps use the configured root directly. All runners still use the
+canonical output-directory composition below.
 
-The baseline script writes:
+## Reproducibility
 
-```text
-baseline_summary.csv
-baseline_summary_agg.csv
-```
+`trainer.deterministic` defaults to `true`. Strict execution uses deterministic
+PyTorch algorithms with errors for unsupported operations, disables cuDNN
+benchmarking, fixes numerical thread counts to one, and disables persistent
+workers while retaining configured parallel loading. Null/omitted matmul precision
+resolves to `highest` in strict mode; explicit existing precision settings remain
+effective. HDBSCAN uses one job in strict mode. Resolved settings are saved.
 
-The aggregate grouping keys are:
+Training shuffles use independent seed/epoch generators. Stochastic image views
+use sample/epoch seeds and preserve caller RNG state; evaluation and diagnostics
+therefore do not perturb training randomness. Worker processes restart each epoch.
+Adapter construction does not consume the matched clustering head's initialization
+RNG stream. Checkpoints restore global RNG, model/optimizer state, method state,
+and the next epoch or DEC/IDEC phase; MLP checkpoints also retain splits and best
+validation weights. Changing schedules or other scientific settings is rejected
+by strict resume. `trainer.deterministic: false` explicitly allows legacy resume,
+without an exact-reproduction guarantee.
 
-```text
-backbone
-gloca
-head
-dataset
-```
+The DINOv2-small revision is pinned to
+`ed25f3a31f01632728cabb09d1542f84ab7b0056`. Its model configuration and weight
+files are SHA-256 checked against reference hashes and included in run/cache
+identity. Strict runs require immutable revision identifiers. Dataset content/order is checked against `dataset.manifest` where
+specified. Versioned manifests cover PlantSeg and PlantVillage; custom datasets
+without a reference manifest are still content-fingerprinted per run.
+
+`reproducibility.json` records effective config/input identity, package versions,
+hardware, source fingerprint, Git revision/dirty status, and invocation. The source
+fingerprint includes local implementation changes. `completed.json` is written
+atomically after canonical and method-specific artifacts finish, with artifact
+hashes. Skip checks validate identity and hashes; `metrics.csv` alone is never
+proof of completion. Incompatible or unverified output directories require a fresh
+location in strict mode. Existing historical outputs are not retroactively certified.
+
+The pinned Windows environment and full reproduction commands are documented in
+`docs/REPRODUCIBILITY.md`. Short real-backbone validation recipes use the
+`*_repro_smoke.yaml` suffix; their tiny subsets and training schedules are debug
+settings and must not be reported as experimental results.
 
 ## Output Contract
 
@@ -715,6 +807,8 @@ logs.json
 Conditional files:
 
 ```text
+reproducibility.json # effective inputs, source, and environment
+completed.json      # final artifact hashes; written last
 attention.pt       # written when attention exists
 checkpoint.ckpt    # written by trainable runners
 confidence.pt      # written by CDC
@@ -858,6 +952,17 @@ cdc_refine_epochs
 cdc_init_mode
 ```
 
+The global-local K-Means baseline appends:
+
+```text
+embedding_source
+patch_pooling
+feature_fusion
+final_embedding_normalized
+embedding_dim
+trainable_parameter_count
+```
+
 Canonical aggregate fields are:
 
 ```text
@@ -954,10 +1059,14 @@ testpaths = ["tests"]
 
 Current tests cover:
 
+- seed override precedence, seed-42 recipe consolidation, and unified baseline sweep expansion,
+- dataset and pinned-backbone byte verification, cache identities, completion hashes, and incompatible checkpoint rejection,
+- exact repeated/interrupted/resumed training, including Windows multiworker CDC with GLoCA,
 - folder dataset and datamodule behavior,
 - DEC/IDEC target update parsing and tiny cached training,
 - conservative GLoCA initialization,
 - GLoCA alpha gradients,
+- GLoCA ablation adapter construction and behavior,
 - direct CLS behavior with no adapter,
 - GLoCA diagnostics scalar outputs,
 - attention visualization helpers,
@@ -970,8 +1079,9 @@ Current tests cover:
 - GLoCA freeze controls,
 - ProPos pseudo-label lookup by dataset index,
 - torch K-Means and spherical K-Means behavior,
+- fixed CLS-plus-mean-patch feature construction and global-local baseline outputs,
 - ProPos import structure,
-- CDC head outputs, reliable-sample edge cases, calibration stop-gradient behavior, initialization fallback logs, CDC named dataloader views, CDC trainer view consumption, CDC optimizer freezing behavior, and CDC script parsing,
+- CDC head outputs, reliable-sample edge cases, calibration stop-gradient behavior, initialization fallback logs, CDC named dataloader views, CDC trainer view consumption, CDC optimizer freezing behavior, CDC ablation config validation, and CDC script parsing,
 - resumable checkpoint helpers, checkpoint-gated evaluation scheduling, and CDC/ProPos/DEC-IDEC resume behavior,
 - assignment array length validation,
 - runtime matmul precision settings,

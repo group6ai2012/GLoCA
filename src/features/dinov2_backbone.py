@@ -7,21 +7,23 @@ import torch
 from torch import nn
 from transformers import AutoModel
 
-from src.features.dinov2 import DINOV2_VARIANTS
+from src.features.dinov2 import DINOV2_VARIANTS, DINOV2_SMALL_REVISION
 
 
 LOGGER = logging.getLogger(__name__)
 
 
 class DINOv2Backbone(nn.Module):
-    def __init__(self, variant: str, image_size: int = 224, freeze: bool = True) -> None:
+    def __init__(self, variant: str, image_size: int = 224, freeze: bool = True, revision: str | None = None) -> None:
         super().__init__()
         if variant not in DINOV2_VARIANTS:
             accepted = ", ".join(sorted(DINOV2_VARIANTS))
             raise ValueError(f"Unknown DINOv2 variant '{variant}'. Accepted values: {accepted}")
         self.variant = variant
         self.image_size = image_size
-        self.model = AutoModel.from_pretrained(variant)
+        revision = revision or DINOV2_SMALL_REVISION
+        self.model = AutoModel.from_pretrained(variant, revision=revision)
+        self.revision = getattr(self.model.config, "_commit_hash", None) or revision
         self.output_dim = int(self.model.config.hidden_size)
         self.patch_size = int(getattr(self.model.config, "patch_size", 14))
         self.patch_grid = (image_size // self.patch_size, image_size // self.patch_size)

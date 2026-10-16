@@ -1,0 +1,70 @@
+experiment:
+  output_dir: outputs/global_local_baseline_smoke
+
+base_config:
+  dataset:
+    training_views: auto
+    limit_per_class: 2
+    include_classes:
+
+  backbone:
+    family: dinov2
+    variant: facebook/dinov2-small
+    revision: ed25f3a31f01632728cabb09d1542f84ab7b0056
+    freeze: true
+    image_size: 224
+
+  gloca:
+    enabled: false
+    name: disabled
+    embedding_dim: 384
+    normalize_output: true
+
+  head:
+    n_clusters: auto
+
+  prediction:
+    deterministic: true
+    export_embeddings: true
+    export_attention: false
+
+  trainer:
+    deterministic: true
+    max_epochs: 1
+    batch_size: 32
+    lr: 1.0e-4
+    accelerator: auto
+    precision: 32
+    matmul_precision: high
+    num_workers: 0
+    checkpoint_interval: 0
+    eval_interval: checkpoint
+    resume_from_checkpoint:
+    profile_resources: true
+
+sweep:
+  datasets: [plantseg]
+  seeds: [42]
+  skip_existing: false
+  fail_fast: true
+  runs:
+    - name: kmeans_cls_mean_patch_concat
+      runner: global_local_kmeans
+      expected:
+        head: kmeans
+        gloca: disabled
+        embedding_source: cls_mean_patch_concat
+      config:
+        experiment:
+          name: kmeans_cls_mean_patch_concat
+        head:
+          name: kmeans
+          training_mode: single_view
+        baseline:
+          embedding_source: cls_mean_patch_concat
+          normalize_embedding: true
+          spherical: false
+          kmeans_init: kmeans++
+          kmeans_n_init: 2
+          kmeans_max_iter: 25
+          kmeans_tol: 1.0e-4

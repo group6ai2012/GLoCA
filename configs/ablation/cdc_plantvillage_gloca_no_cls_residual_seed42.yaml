@@ -1,10 +1,11 @@
 experiment:
-  name: gloca_gated
-  seed: 69
-  output_dir: outputs/main_experiments
+  name: gloca_no_cls_residual
+  seed: 42  # Other used seeds: 67, 69; override with --seed.
+  output_dir: outputs/ablation_studies
 
 dataset:
   name: plantvillage
+  manifest: data/manifests/plantvillage.json
   limit_per_class:
   include_classes:
   training_views: cdc_weak_strong_calibration
@@ -12,12 +13,13 @@ dataset:
 backbone:
   family: dinov2
   variant: facebook/dinov2-small
+  revision: ed25f3a31f01632728cabb09d1542f84ab7b0056
   freeze: true
   image_size: 224
 
 gloca:
   enabled: true
-  name: gloca_gated
+  name: gloca_no_cls_residual
   embedding_dim: 384
   alpha_init: 0.0
   normalize_output: true
@@ -71,6 +73,8 @@ prediction:
   export_attention: true
 
 trainer:
+
+  deterministic: true
   max_epochs: 50
   batch_size: 256
   lr: 1.0e-4
@@ -79,8 +83,8 @@ trainer:
   matmul_precision: high
   num_workers: 4
   pin_memory: true
-  persistent_workers: true
-  checkpoint_interval: 5
+  persistent_workers: false
+  checkpoint_interval: 10
   eval_interval: checkpoint
   resume_from_checkpoint: auto
   profile_resources: true

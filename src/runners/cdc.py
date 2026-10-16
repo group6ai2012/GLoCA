@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.experiments.reproducibility import record_run
+
 import time
 from copy import deepcopy
 from typing import Any
@@ -43,6 +45,7 @@ CDC_EXTRA_METRICS = [
 ]
 
 
+@record_run
 def run_cdc(config: dict[str, Any]) -> ExperimentResult:
     config = deepcopy(config)
     runtime_logs = apply_runtime_settings(config)
@@ -69,6 +72,8 @@ def run_cdc(config: dict[str, Any]) -> ExperimentResult:
         image_size=int(config["backbone"]["image_size"]),
         batch_size=int(config["trainer"]["batch_size"]),
         num_workers=int(config["trainer"]["num_workers"]),
+        seed=int(config["experiment"]["seed"]),
+        deterministic=bool(config["trainer"].get("deterministic", True)),
         training_mode="cdc",
         training_views=str(config["cdc"]["training_views"]),
         cdc_augment_config=config["cdc"].get("augment", {}),
@@ -81,9 +86,12 @@ def run_cdc(config: dict[str, Any]) -> ExperimentResult:
         variant=config["backbone"]["variant"],
         image_size=int(config["backbone"]["image_size"]),
         freeze=bool(config["backbone"]["freeze"]),
+        revision=config["backbone"].get("revision"),
     )
     assert_backbone_frozen(backbone)
-    adapter = build_adapter(config, input_dim=backbone.output_dim)
+    # Adapter construction must not change the matched CLS clustering-head initialization.
+    with torch.random.fork_rng(devices=[]):
+        adapter = build_adapter(config, input_dim=backbone.output_dim)
     gloca_name = resolve_gloca_name(config)
     embedding_dim = backbone.output_dim if adapter is None else int(config["gloca"]["embedding_dim"])
     head = CDCHead(

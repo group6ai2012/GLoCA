@@ -14,12 +14,17 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.experiments.cli import bootstrap, add_seed_arguments, override_seeds
+
+bootstrap(reexec=__name__ == "__main__")
+
 from src.experiments.config import (
     load_experiment_config,
     validate_propos_config,
     validate_propos_diagnostics_config,
 )
 from src.runners import run_propos
+from src.experiments.reproducibility import is_complete, verification_session
 
 
 SUMMARY_FIELDS = [
@@ -69,12 +74,14 @@ SUMMARY_FIELDS = [
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a YAML-defined ProPos/GLoCA diagnostic matrix.")
     parser.add_argument("config_path", type=Path)
+    add_seed_arguments(parser)
     return parser.parse_args()
 
 
+@verification_session()
 def main() -> None:
     args = parse_args()
-    config = load_experiment_config(args.config_path)
+    config = override_seeds(load_experiment_config(args.config_path), args.seed)
     validate_propos_diagnostics_config(config)
     plans = _build_plans(config)
     report_root = _report_root(config)
@@ -92,6 +99,8 @@ def main() -> None:
     write_markdown_report(md_path, rows)
     print(f"Wrote summary CSV: {csv_path}", flush=True)
     print(f"Wrote Markdown report: {md_path}", flush=True)
+    if any(row["status"] == "failed" for row in rows):
+        raise SystemExit(1)
 
 
 def _build_plans(config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -136,7 +145,7 @@ def run_or_collect(plan: dict[str, Any], *, force: bool) -> dict[str, Any]:
     status = "completed"
     error = ""
     try:
-        if metrics_path.exists() and logs_path.exists() and not force:
+        if not force and is_complete(plan["config"]):
             status = "skipped"
         else:
             result = run_propos(plan["config"])

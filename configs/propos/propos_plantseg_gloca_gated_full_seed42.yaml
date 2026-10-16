@@ -5,6 +5,7 @@ experiment:
 
 dataset:
   name: plantseg
+  manifest: data/manifests/plantseg.json
   limit_per_class:
   include_classes:
   training_views: auto
@@ -12,6 +13,7 @@ dataset:
 backbone:
   family: dinov2
   variant: facebook/dinov2-small
+  revision: ed25f3a31f01632728cabb09d1542f84ab7b0056
   freeze: true
   image_size: 224
 
@@ -63,6 +65,8 @@ prediction:
   export_attention: true
 
 trainer:
+
+  deterministic: true
   max_epochs: 100
   batch_size: 256
   lr: 5.0e-4

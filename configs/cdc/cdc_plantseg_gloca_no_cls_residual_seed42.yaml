@@ -1,0 +1,37 @@
+experiment:
+  name: gloca_no_cls_residual
+  seed: 42
+  output_dir: outputs/ablation_studies
+dataset:
+  name: plantseg
+  manifest: data/manifests/plantseg.json
+  training_views: cdc_weak_strong_calibration
+backbone: {family: dinov2, variant: facebook/dinov2-small, revision: ed25f3a31f01632728cabb09d1542f84ab7b0056, freeze: true, image_size: 224}
+gloca: {enabled: true, name: gloca_no_cls_residual, embedding_dim: 384, normalize_output: true}
+head: {name: cdc, n_clusters: auto, training_mode: cdc}
+prediction: {deterministic: true, export_embeddings: true, export_attention: true}
+trainer: {deterministic: true, max_epochs: 200, batch_size: 256, lr: 1.0e-4, precision: 32, num_workers: 4}
+cdc:
+  embedding_dim: 384
+  hidden_dim: 512
+  training_views: cdc_weak_strong_calibration
+  meta_batch_size: 2048
+  sub_batch_size: 256
+  per_class_selected_num: auto
+  calibration_k: 160
+  meta_batch_drop_last: false
+  w_en: 1.0
+  prototype_init: true
+  orthogonalize_init: true
+  kmeans_init: kmeans++
+  kmeans_n_init: 10
+  kmeans_max_iter: 100
+  kmeans_tol: 1.0e-4
+  weight_decay: 0.0
+  optimizer: adamw
+  gloca_lr_multiplier: 1.0
+  gloca_alpha_lr_multiplier: 1.0
+  freeze_gloca: false
+  freeze_gloca_epochs: 0
+  log_gloca_diagnostics: true
+  augment: {weak: {name: current_train}, strong: {name: randaugment_cutout}, calibration: {name: deterministic_prediction}}

@@ -40,7 +40,10 @@ def resolve_resume_checkpoint(raw_value: Any, checkpoint_dir: Path) -> Path | No
         return None
     if value.lower() == "auto":
         return find_latest_checkpoint(checkpoint_dir)
-    return Path(value)
+    path = Path(value)
+    if not path.is_file():
+        raise FileNotFoundError(f"Resume checkpoint does not exist: {path}")
+    return path
 
 
 def capture_rng_state() -> dict[str, Any]:

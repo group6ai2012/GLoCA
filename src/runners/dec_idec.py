@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.experiments.reproducibility import record_run
+
 import time
 from copy import deepcopy
 from typing import Any
@@ -21,7 +23,8 @@ from src.training.dec_idec_trainer import DECIDECTrainer, parse_target_update_in
 from src.utils import ExperimentResult
 
 
-def run_dec_idec(config: dict[str, Any]) -> ExperimentResult:
+@record_run
+def run_dec_idec(config: dict[str, Any], cache: dict[str, Any] | None = None) -> ExperimentResult:
     config = deepcopy(config)
     runtime_logs = apply_runtime_settings(config)
     head_name = str(config["head"]["name"]).lower()
@@ -42,30 +45,42 @@ def run_dec_idec(config: dict[str, Any]) -> ExperimentResult:
     save_experiment_config(config, output_dir / "config.yaml")
 
     seed = ctx.seed
-    datamodule = ClusteringDataModule(
-        spec=spec,
-        image_size=int(config["backbone"]["image_size"]),
-        batch_size=int(config["trainer"]["batch_size"]),
-        num_workers=int(config["trainer"]["num_workers"]),
-        training_mode="single_view",
-        training_views=1,
-    )
-    backbone = DINOv2Backbone(
-        variant=config["backbone"]["variant"],
-        image_size=int(config["backbone"]["image_size"]),
-        freeze=bool(config["backbone"]["freeze"]),
-    )
-    assert_backbone_frozen(backbone)
+    if cache is None:
+        datamodule = ClusteringDataModule(
+            spec=spec,
+            image_size=int(config["backbone"]["image_size"]),
+            batch_size=int(config["trainer"]["batch_size"]),
+            num_workers=int(config["trainer"]["num_workers"]),
+            seed=int(config["experiment"]["seed"]),
+            deterministic=bool(config["trainer"].get("deterministic", True)),
+            training_mode="single_view",
+            training_views=1,
+        )
+        backbone = DINOv2Backbone(
+            variant=config["backbone"]["variant"],
+            image_size=int(config["backbone"]["image_size"]),
+            freeze=bool(config["backbone"]["freeze"]),
+            revision=config["backbone"].get("revision"),
+        )
+        assert_backbone_frozen(backbone)
+    else:
+        backbone = cache["backbone"]
 
     device = ctx.device
     total_start = time.perf_counter()
-    extracted = extract_deterministic_embeddings(
-        backbone=backbone,
-        adapter=None,
-        datamodule=datamodule,
-        device=device,
-        normalize_cls=bool(config.get("gloca", {}).get("normalize_output", True)),
-    )
+    if cache is None:
+        extracted = extract_deterministic_embeddings(
+            backbone=backbone,
+            adapter=None,
+            datamodule=datamodule,
+            device=device,
+            normalize_cls=bool(config.get("gloca", {}).get("normalize_output", True)),
+        )
+    else:
+        from src.experiments.reproducibility import validate_feature_cache
+        validate_feature_cache(config, cache, "cls")
+        extracted = cache
+
     x = extracted["embeddings"].float()
     input_dim = int(config.get("baseline", {}).get("input_dim", x.shape[1]))
     hidden_dims = tuple(int(dim) for dim in config.get("baseline", {}).get("hidden_dims", [512, 512, 2048]))
@@ -73,6 +88,8 @@ def run_dec_idec(config: dict[str, Any]) -> ExperimentResult:
     if input_dim != x.shape[1]:
         raise ValueError(f"Configured input_dim={input_dim} does not match cached CLS dim={x.shape[1]}")
 
+    from src.utils import seed_everything
+    seed_everything(ctx.seed)
     model = DINOCLSDECModel(
         n_clusters=int(config["head"]["n_clusters"]),
         input_dim=input_dim,
@@ -155,6 +172,8 @@ def run_dec_idec(config: dict[str, Any]) -> ExperimentResult:
     latent, assignments = trainer.predict_all()
     inference_time_s = time.perf_counter() - inference_start
     total_time_s = time.perf_counter() - total_start
+    if cache is not None:
+        total_time_s += float(cache["cache_time_s"])
 
     assignment_extras = {
         "input_dim": input_dim,
