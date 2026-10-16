@@ -37,7 +37,7 @@ ACC uses Hungarian cluster-to-label alignment. HDBSCAN noise is remapped to one 
 
 Tables use final exported `metrics.csv` values. Means and sample standard deviations use the stated seeds (`ddof=1`). Single-seed ProPos comparisons have no estimated between-seed uncertainty. Peak checkpoint metrics are reported separately and are not substituted for final results. Unsupervised evaluation is transductive; the supervised MLP is a separate label-trained, test-split reference selected by validation performance.
 
-### Coverage and historical metadata
+### Coverage
 
 | Family | Datasets | Seeds | Distinct final result files |
 |---|---|---|---:|
@@ -48,10 +48,6 @@ Tables use final exported `metrics.csv` values. Means and sample standard deviat
 | Three adapter ablations | PlantSeg | 42, 67, 69 | 9 |
 
 The report covers 91 distinct final result files. Reference runs repeated in comparison tables are not additional experiments. All 91 runs' ARI, NMI, and ACC were checked against their saved assignments when consolidating this report (maximum absolute discrepancy below 1e-12).
-
-Historical PlantSeg exports are not uniform in head size: the main CDC results report 114 outputs, while the current reference snapshot has 115 categories. Ablations report 114 outputs at seed 42 and 115 at seeds 67 and 69. Some saved YAML values also differ from exported output counts; per-seed tables retain the counts in the metrics and assignment metadata rather than silently replacing them with current config values. Current `n_clusters: auto` recipes derive the count from the selected dataset. These differences limit historical cross-family and ablation comparisons; they must not be described as fully controlled same-capacity comparisons.
-
-Evaluation labels also differ between historical PlantSeg seed groups: main CDC assignments contain 114 label categories at seeds 42, 67, and 69, but 115 at seeds 99 and 123. Ablation assignments contain 114 at seed 42 and 115 at seeds 67 and 69. Each of the ten CDC and two exploratory ProPos CLS/GLoCA pairs has matching image IDs, label mappings, and exported head size within its seed. However, the five-seed PlantSeg summary is not a study with an invariant label definition across seeds. The per-seed tables expose both observed label-category and reported cluster counts; this additional limitation applies to aggregate and uncertainty interpretations.
 
 ## Baseline results
 
@@ -132,12 +128,12 @@ The historical artifacts did not save selected sample identities, their online p
 
 ## ProPos: seed-42 exploratory comparison
 
-| Dataset | Embedding | Seed | Label categories | Reported clusters | ARI | NMI | ACC | Silhouette |
-|---|---|---|---|---|---|---|---|---|
-| plantseg | CLS | 42 | 114 | 114 | 0.3302 | 0.6685 | 0.4233 | 0.1181 |
-| plantseg | Gated GLoCA | 42 | 114 | 114 | 0.3247 | 0.6630 | 0.4139 | 0.1361 |
-| plantvillage | CLS | 42 | 38 | 38 | 0.5784 | 0.8191 | 0.6165 | 0.2215 |
-| plantvillage | Gated GLoCA | 42 | 38 | 38 | 0.5059 | 0.7874 | 0.5604 | 0.2555 |
+| Dataset | Embedding | Seed | ARI | NMI | ACC | Silhouette |
+|---|---|---|---|---|---|---|
+| plantseg | CLS | 42 | 0.3302 | 0.6685 | 0.4233 | 0.1181 |
+| plantseg | Gated GLoCA | 42 | 0.3247 | 0.6630 | 0.4139 | 0.1361 |
+| plantvillage | CLS | 42 | 0.5784 | 0.8191 | 0.6165 | 0.2215 |
+| plantvillage | Gated GLoCA | 42 | 0.5059 | 0.7874 | 0.5604 | 0.2555 |
 
 | Dataset | Seed | Δ ARI | Δ NMI | Δ ACC | Δ silhouette |
 |---|---|---|---|---|---|
@@ -162,13 +158,13 @@ The ablations replace gated attention with mean pooling, remove the patch branch
 
 Adapter counts below use the implemented 384-dimensional modules. Total trainable capacity adds both CDC heads at each exported output count, excluding the frozen DINOv2 backbone. Lists are ordered by seeds 42, 67, and 69. The no-CLS-residual module retains its inherited scalar parameter even though the forward output does not use that scalar.
 
-| Variant | Adapter parameters | Head outputs by seed | Total trainable parameters by seed |
-|---|---|---|---|
-| CLS reference | 0 | 114, 114, 114 | 513,252, 513,252, 513,252 |
-| Gated GLoCA reference | 1,477,634 | 114, 114, 114 | 1,990,886, 1,990,886, 1,990,886 |
-| Mean-pool GLoCA | 1,181,569 | 114, 115, 115 | 1,694,821, 1,695,847, 1,695,847 |
-| No-CLS-residual GLoCA | 1,477,634 | 114, 115, 115 | 1,990,886, 1,991,912, 1,991,912 |
-| No-patches GLoCA | 738,817 | 114, 115, 115 | 1,252,069, 1,253,095, 1,253,095 |
+| Variant | Adapter parameters | Total trainable parameters by seed |
+|---|---| ---|
+| CLS reference | 0 | 513,252, 513,252, 513,252 |
+| Gated GLoCA reference | 1,477,634 | 1,990,886, 1,990,886, 1,990,886 |
+| Mean-pool GLoCA | 1,181,569 | 1,694,821, 1,695,847, 1,695,847 |
+| No-CLS-residual GLoCA | 1,477,634 | 1,990,886, 1,991,912, 1,991,912 |
+| No-patches GLoCA | 738,817 | 1,252,069, 1,253,095, 1,253,095 |
 
 Removing the patch branch retains much of the historical ACC gain over direct CLS. Across seeds 42, 67, and 69, No-patches minus CLS is about +3.58 percentage points and gated GLoCA minus No-patches is about +1.35 points. These arithmetic differences are descriptive: adapter capacity and output counts differ, so they cannot attribute that residual gain exclusively to patch locality. Mean pooling is worse than No-patches for ARI, NMI, and ACC on each of these seeds.
 
@@ -230,93 +226,93 @@ The tables use the following saved artifact roots, which are local and not distr
 
 Reported cluster counts are copied from canonical outputs. The supervised rows evaluate the test split; all other rows evaluate the full image collection.
 
-| Dataset | Method | Seed | Label categories | Reported clusters | ARI | NMI | ACC | Silhouette |
-|---|---|---|---|---|---|---|---|---|
-| plantseg | DEC | 42 | 114 | 114 | 0.2699 | 0.6354 | 0.3710 | 0.1690 |
-| plantseg | DEC | 67 | 114 | 114 | 0.2630 | 0.6331 | 0.3612 | 0.1693 |
-| plantseg | DEC | 69 | 114 | 114 | 0.2561 | 0.6304 | 0.3666 | 0.1633 |
-| plantseg | Fixed CLS + mean-patch K-Means | 42 | 115 | 115 | 0.2832 | 0.6528 | 0.3785 | 0.0570 |
-| plantseg | Fixed CLS + mean-patch K-Means | 67 | 115 | 115 | 0.2792 | 0.6410 | 0.3792 | 0.0576 |
-| plantseg | Fixed CLS + mean-patch K-Means | 69 | 115 | 115 | 0.2853 | 0.6534 | 0.3865 | 0.0557 |
-| plantseg | GMM | 42 | 115 | 115 | 0.2766 | 0.6411 | 0.3760 | 0.0427 |
-| plantseg | GMM | 67 | 115 | 115 | 0.2790 | 0.6448 | 0.3783 | 0.0476 |
-| plantseg | GMM | 69 | 115 | 115 | 0.2639 | 0.6403 | 0.3660 | 0.0410 |
+| Dataset | Method | Seed | ARI | NMI | ACC | Silhouette |
+|---|---|---|---|---|---|---|
+| plantseg | DEC | 42 | 0.2699 | 0.6354 | 0.3710 | 0.1690 |
+| plantseg | DEC | 67 | 0.2630 | 0.6331 | 0.3612 | 0.1693 |
+| plantseg | DEC | 69 | 0.2561 | 0.6304 | 0.3666 | 0.1633 |
+| plantseg | Fixed CLS + mean-patch K-Means | 42 | 0.2832 | 0.6528 | 0.3785 | 0.0570 |
+| plantseg | Fixed CLS + mean-patch K-Means | 67 | 0.2792 | 0.6410 | 0.3792 | 0.0576 |
+| plantseg | Fixed CLS + mean-patch K-Means | 69 | 0.2853 | 0.6534 | 0.3865 | 0.0557 |
+| plantseg | GMM | 42 | 0.2766 | 0.6411 | 0.3760 | 0.0427 |
+| plantseg | GMM | 67 | 0.2790 | 0.6448 | 0.3783 | 0.0476 |
+| plantseg | GMM | 69 | 0.2639 | 0.6403 | 0.3660 | 0.0410 |
 | plantseg | HDBSCAN | 42 | 115 | 96 | 0.0157 | 0.3254 | 0.1385 | -0.1442 |
 | plantseg | HDBSCAN | 67 | 115 | 96 | 0.0157 | 0.3254 | 0.1385 | -0.1442 |
 | plantseg | HDBSCAN | 69 | 115 | 96 | 0.0157 | 0.3254 | 0.1385 | -0.1442 |
-| plantseg | IDEC | 42 | 114 | 114 | 0.2698 | 0.6354 | 0.3707 | 0.1687 |
-| plantseg | IDEC | 67 | 114 | 114 | 0.2632 | 0.6333 | 0.3612 | 0.1692 |
-| plantseg | IDEC | 69 | 114 | 114 | 0.2560 | 0.6304 | 0.3664 | 0.1629 |
-| plantseg | K-Means | 42 | 114 | 114 | 0.2830 | 0.6503 | 0.3823 | 0.0571 |
-| plantseg | K-Means | 67 | 114 | 114 | 0.2910 | 0.6519 | 0.3888 | 0.0632 |
-| plantseg | K-Means | 69 | 114 | 114 | 0.2815 | 0.6515 | 0.3836 | 0.0570 |
-| plantseg | ProPos (CLS) | 42 | 114 | 114 | 0.3302 | 0.6685 | 0.4233 | 0.1181 |
-| plantseg | ProPos (CLS) | 67 | 115 | 115 | 0.3277 | 0.6659 | 0.4078 | 0.1168 |
-| plantseg | ProPos (CLS) | 69 | 115 | 115 | 0.3091 | 0.6659 | 0.3969 | 0.1151 |
-| plantseg | Spherical K-Means | 42 | 114 | 114 | 0.2967 | 0.6511 | 0.3995 | 0.0634 |
-| plantseg | Spherical K-Means | 67 | 114 | 114 | 0.2928 | 0.6535 | 0.3906 | 0.0654 |
-| plantseg | Spherical K-Means | 69 | 114 | 114 | 0.2868 | 0.6538 | 0.3912 | 0.0598 |
-| plantseg | Spherical K-Means + untrained GLoCA | 42 | 114 | 114 | 0.2972 | 0.6510 | 0.3994 | 0.0633 |
-| plantseg | Spherical K-Means + untrained GLoCA | 67 | 114 | 114 | 0.2934 | 0.6544 | 0.3913 | 0.0662 |
-| plantseg | Spherical K-Means + untrained GLoCA | 69 | 114 | 114 | 0.2877 | 0.6546 | 0.3927 | 0.0597 |
-| plantseg | Supervised MLP (test) | 42 | 115 | 115 | 0.6060 | 0.8152 | 0.7189 | 0.0453 |
-| plantseg | Supervised MLP (test) | 67 | 115 | 115 | 0.6078 | 0.8201 | 0.7328 | 0.0499 |
-| plantseg | Supervised MLP (test) | 69 | 115 | 115 | 0.6090 | 0.8164 | 0.7206 | 0.0412 |
-| plantvillage | DEC | 42 | 38 | 38 | 0.4878 | 0.7670 | 0.5305 | 0.0871 |
-| plantvillage | DEC | 67 | 38 | 38 | 0.5536 | 0.7940 | 0.5850 | 0.0976 |
-| plantvillage | DEC | 69 | 38 | 38 | 0.5532 | 0.7982 | 0.5872 | 0.0971 |
-| plantvillage | Fixed CLS + mean-patch K-Means | 42 | 38 | 38 | 0.5140 | 0.7832 | 0.5486 | 0.0947 |
-| plantvillage | Fixed CLS + mean-patch K-Means | 67 | 38 | 38 | 0.5674 | 0.7951 | 0.5797 | 0.1044 |
-| plantvillage | Fixed CLS + mean-patch K-Means | 69 | 38 | 38 | 0.5543 | 0.7988 | 0.6020 | 0.0968 |
-| plantvillage | GMM | 42 | 38 | 38 | 0.4749 | 0.7788 | 0.5267 | 0.0869 |
-| plantvillage | GMM | 67 | 38 | 38 | 0.5087 | 0.7831 | 0.5580 | 0.0930 |
-| plantvillage | GMM | 69 | 38 | 38 | 0.5344 | 0.7934 | 0.6008 | 0.0982 |
+| plantseg | IDEC | 42 | 0.2698 | 0.6354 | 0.3707 | 0.1687 |
+| plantseg | IDEC | 67 | 0.2632 | 0.6333 | 0.3612 | 0.1692 |
+| plantseg | IDEC | 69 | 0.2560 | 0.6304 | 0.3664 | 0.1629 |
+| plantseg | K-Means | 42 | 0.2830 | 0.6503 | 0.3823 | 0.0571 |
+| plantseg | K-Means | 67 | 0.2910 | 0.6519 | 0.3888 | 0.0632 |
+| plantseg | K-Means | 69 | 0.2815 | 0.6515 | 0.3836 | 0.0570 |
+| plantseg | ProPos (CLS) | 42 | 0.3302 | 0.6685 | 0.4233 | 0.1181 |
+| plantseg | ProPos (CLS) | 67 | 0.3277 | 0.6659 | 0.4078 | 0.1168 |
+| plantseg | ProPos (CLS) | 69 | 0.3091 | 0.6659 | 0.3969 | 0.1151 |
+| plantseg | Spherical K-Means | 42 | 0.2967 | 0.6511 | 0.3995 | 0.0634 |
+| plantseg | Spherical K-Means | 67 | 0.2928 | 0.6535 | 0.3906 | 0.0654 |
+| plantseg | Spherical K-Means | 69 | 0.2868 | 0.6538 | 0.3912 | 0.0598 |
+| plantseg | Spherical K-Means + untrained GLoCA | 42 | 0.2972 | 0.6510 | 0.3994 | 0.0633 |
+| plantseg | Spherical K-Means + untrained GLoCA | 67 | 0.2934 | 0.6544 | 0.3913 | 0.0662 |
+| plantseg | Spherical K-Means + untrained GLoCA | 69 | 0.2877 | 0.6546 | 0.3927 | 0.0597 |
+| plantseg | Supervised MLP (test) | 42 | 0.6060 | 0.8152 | 0.7189 | 0.0453 |
+| plantseg | Supervised MLP (test) | 67 | 0.6078 | 0.8201 | 0.7328 | 0.0499 |
+| plantseg | Supervised MLP (test) | 69 | 0.6090 | 0.8164 | 0.7206 | 0.0412 |
+| plantvillage | DEC | 42 | 0.4878 | 0.7670 | 0.5305 | 0.0871 |
+| plantvillage | DEC | 67 | 0.5536 | 0.7940 | 0.5850 | 0.0976 |
+| plantvillage | DEC | 69 | 0.5532 | 0.7982 | 0.5872 | 0.0971 |
+| plantvillage | Fixed CLS + mean-patch K-Means | 42 | 0.5140 | 0.7832 | 0.5486 | 0.0947 |
+| plantvillage | Fixed CLS + mean-patch K-Means | 67 | 0.5674 | 0.7951 | 0.5797 | 0.1044 |
+| plantvillage | Fixed CLS + mean-patch K-Means | 69 | 0.5543 | 0.7988 | 0.6020 | 0.0968 |
+| plantvillage | GMM | 42 | 0.4749 | 0.7788 | 0.5267 | 0.0869 |
+| plantvillage | GMM | 67 | 0.5087 | 0.7831 | 0.5580 | 0.0930 |
+| plantvillage | GMM | 69 | 0.5344 | 0.7934 | 0.6008 | 0.0982 |
 | plantvillage | HDBSCAN | 42 | 38 | 6 | 0.0151 | 0.1433 | 0.1267 | 0.1541 |
 | plantvillage | HDBSCAN | 67 | 38 | 6 | 0.0151 | 0.1433 | 0.1267 | 0.1541 |
 | plantvillage | HDBSCAN | 69 | 38 | 6 | 0.0151 | 0.1433 | 0.1267 | 0.1541 |
-| plantvillage | IDEC | 42 | 38 | 38 | 0.4878 | 0.7669 | 0.5304 | 0.0867 |
-| plantvillage | IDEC | 67 | 38 | 38 | 0.5535 | 0.7940 | 0.5851 | 0.0969 |
-| plantvillage | IDEC | 69 | 38 | 38 | 0.5530 | 0.7980 | 0.5870 | 0.0963 |
-| plantvillage | K-Means | 42 | 38 | 38 | 0.5354 | 0.7856 | 0.5750 | 0.0903 |
-| plantvillage | K-Means | 67 | 38 | 38 | 0.5166 | 0.7845 | 0.5555 | 0.1015 |
-| plantvillage | K-Means | 69 | 38 | 38 | 0.5718 | 0.7877 | 0.5900 | 0.0990 |
-| plantvillage | ProPos (CLS) | 42 | 38 | 38 | 0.5784 | 0.8191 | 0.6165 | 0.2215 |
-| plantvillage | ProPos (CLS) | 67 | 38 | 38 | 0.5985 | 0.8331 | 0.6379 | 0.2260 |
-| plantvillage | ProPos (CLS) | 69 | 38 | 38 | 0.5410 | 0.8092 | 0.6002 | 0.2027 |
-| plantvillage | Spherical K-Means | 42 | 38 | 38 | 0.5338 | 0.7839 | 0.5709 | 0.0905 |
-| plantvillage | Spherical K-Means | 67 | 38 | 38 | 0.5153 | 0.7836 | 0.5541 | 0.1019 |
-| plantvillage | Spherical K-Means | 69 | 38 | 38 | 0.4994 | 0.7841 | 0.5636 | 0.0908 |
-| plantvillage | Spherical K-Means + untrained GLoCA | 42 | 38 | 38 | 0.5337 | 0.7840 | 0.5709 | 0.0904 |
-| plantvillage | Spherical K-Means + untrained GLoCA | 67 | 38 | 38 | 0.5152 | 0.7835 | 0.5540 | 0.1019 |
-| plantvillage | Spherical K-Means + untrained GLoCA | 69 | 38 | 38 | 0.4986 | 0.7836 | 0.5635 | 0.0903 |
-| plantvillage | Supervised MLP (test) | 42 | 38 | 38 | 0.9892 | 0.9855 | 0.9908 | 0.2543 |
-| plantvillage | Supervised MLP (test) | 67 | 38 | 38 | 0.9892 | 0.9861 | 0.9918 | 0.2509 |
-| plantvillage | Supervised MLP (test) | 69 | 38 | 38 | 0.9891 | 0.9844 | 0.9901 | 0.2533 |
+| plantvillage | IDEC | 42 | 0.4878 | 0.7669 | 0.5304 | 0.0867 |
+| plantvillage | IDEC | 67 | 0.5535 | 0.7940 | 0.5851 | 0.0969 |
+| plantvillage | IDEC | 69 | 0.5530 | 0.7980 | 0.5870 | 0.0963 |
+| plantvillage | K-Means | 42 | 0.5354 | 0.7856 | 0.5750 | 0.0903 |
+| plantvillage | K-Means | 67 | 0.5166 | 0.7845 | 0.5555 | 0.1015 |
+| plantvillage | K-Means | 69 | 0.5718 | 0.7877 | 0.5900 | 0.0990 |
+| plantvillage | ProPos (CLS) | 42 | 0.5784 | 0.8191 | 0.6165 | 0.2215 |
+| plantvillage | ProPos (CLS) | 67 | 0.5985 | 0.8331 | 0.6379 | 0.2260 |
+| plantvillage | ProPos (CLS) | 69 | 0.5410 | 0.8092 | 0.6002 | 0.2027 |
+| plantvillage | Spherical K-Means | 42 | 0.5338 | 0.7839 | 0.5709 | 0.0905 |
+| plantvillage | Spherical K-Means | 67 | 0.5153 | 0.7836 | 0.5541 | 0.1019 |
+| plantvillage | Spherical K-Means | 69 | 0.4994 | 0.7841 | 0.5636 | 0.0908 |
+| plantvillage | Spherical K-Means + untrained GLoCA | 42 | 0.5337 | 0.7840 | 0.5709 | 0.0904 |
+| plantvillage | Spherical K-Means + untrained GLoCA | 67 | 0.5152 | 0.7835 | 0.5540 | 0.1019 |
+| plantvillage | Spherical K-Means + untrained GLoCA | 69 | 0.4986 | 0.7836 | 0.5635 | 0.0903 |
+| plantvillage | Supervised MLP (test) | 42 | 0.9892 | 0.9855 | 0.9908 | 0.2543 |
+| plantvillage | Supervised MLP (test) | 67 | 0.9892 | 0.9861 | 0.9918 | 0.2509 |
+| plantvillage | Supervised MLP (test) | 69 | 0.9891 | 0.9844 | 0.9901 | 0.2533 |
 
 ## Appendix B: CDC per-seed results and paired deltas
 
-| Dataset | Embedding | Seed | Label categories | Reported clusters | ARI | NMI | ACC | Silhouette |
-|---|---|---|---|---|---|---|---|---|
-| plantseg | CLS | 42 | 114 | 114 | 0.3385 | 0.6838 | 0.4303 | 0.0667 |
-| plantseg | CLS | 67 | 114 | 114 | 0.3560 | 0.6851 | 0.4473 | 0.0636 |
-| plantseg | CLS | 69 | 114 | 114 | 0.3379 | 0.6891 | 0.4406 | 0.0689 |
-| plantseg | CLS | 99 | 115 | 115 | 0.3235 | 0.6794 | 0.4235 | 0.0615 |
-| plantseg | CLS | 123 | 115 | 115 | 0.3357 | 0.6856 | 0.4408 | 0.0648 |
-| plantseg | Gated GLoCA | 42 | 114 | 114 | 0.4333 | 0.7266 | 0.5124 | 0.1122 |
-| plantseg | Gated GLoCA | 67 | 114 | 114 | 0.3769 | 0.6912 | 0.4663 | 0.1048 |
-| plantseg | Gated GLoCA | 69 | 114 | 114 | 0.3994 | 0.7188 | 0.4873 | 0.1076 |
-| plantseg | Gated GLoCA | 99 | 115 | 115 | 0.3775 | 0.6976 | 0.4623 | 0.1036 |
-| plantseg | Gated GLoCA | 123 | 115 | 115 | 0.3848 | 0.7022 | 0.4765 | 0.1141 |
-| plantvillage | CLS | 42 | 38 | 38 | 0.5889 | 0.8213 | 0.6243 | 0.0983 |
-| plantvillage | CLS | 67 | 38 | 38 | 0.5910 | 0.8260 | 0.6182 | 0.0976 |
-| plantvillage | CLS | 69 | 38 | 38 | 0.6176 | 0.8369 | 0.6386 | 0.1003 |
-| plantvillage | CLS | 99 | 38 | 38 | 0.6185 | 0.8357 | 0.6392 | 0.1006 |
-| plantvillage | CLS | 123 | 38 | 38 | 0.5820 | 0.8291 | 0.6097 | 0.1012 |
-| plantvillage | Gated GLoCA | 42 | 38 | 38 | 0.6488 | 0.8752 | 0.6674 | 0.2089 |
-| plantvillage | Gated GLoCA | 67 | 38 | 38 | 0.5878 | 0.8605 | 0.6470 | 0.1862 |
-| plantvillage | Gated GLoCA | 69 | 38 | 38 | 0.6214 | 0.8632 | 0.6691 | 0.1988 |
-| plantvillage | Gated GLoCA | 99 | 38 | 38 | 0.6578 | 0.8863 | 0.6909 | 0.1928 |
-| plantvillage | Gated GLoCA | 123 | 38 | 38 | 0.5768 | 0.8503 | 0.6248 | 0.1910 |
+| Dataset | Embedding | Seed | ARI | NMI | ACC | Silhouette |
+|---|---|---|---|---|---|---|
+| plantseg | CLS | 42 | 0.3385 | 0.6838 | 0.4303 | 0.0667 |
+| plantseg | CLS | 67 | 0.3560 | 0.6851 | 0.4473 | 0.0636 |
+| plantseg | CLS | 69 | 0.3379 | 0.6891 | 0.4406 | 0.0689 |
+| plantseg | CLS | 99 | 0.3235 | 0.6794 | 0.4235 | 0.0615 |
+| plantseg | CLS | 123 | 0.3357 | 0.6856 | 0.4408 | 0.0648 |
+| plantseg | Gated GLoCA | 42 | 0.4333 | 0.7266 | 0.5124 | 0.1122 |
+| plantseg | Gated GLoCA | 67 | 0.3769 | 0.6912 | 0.4663 | 0.1048 |
+| plantseg | Gated GLoCA | 69 | 0.3994 | 0.7188 | 0.4873 | 0.1076 |
+| plantseg | Gated GLoCA | 99 | 0.3775 | 0.6976 | 0.4623 | 0.1036 |
+| plantseg | Gated GLoCA | 123 | 0.3848 | 0.7022 | 0.4765 | 0.1141 |
+| plantvillage | CLS | 42 | 0.5889 | 0.8213 | 0.6243 | 0.0983 |
+| plantvillage | CLS | 67 | 0.5910 | 0.8260 | 0.6182 | 0.0976 |
+| plantvillage | CLS | 69 | 0.6176 | 0.8369 | 0.6386 | 0.1003 |
+| plantvillage | CLS | 99 | 0.6185 | 0.8357 | 0.6392 | 0.1006 |
+| plantvillage | CLS | 123 | 0.5820 | 0.8291 | 0.6097 | 0.1012 |
+| plantvillage | Gated GLoCA | 42 | 0.6488 | 0.8752 | 0.6674 | 0.2089 |
+| plantvillage | Gated GLoCA | 67 | 0.5878 | 0.8605 | 0.6470 | 0.1862 |
+| plantvillage | Gated GLoCA | 69 | 0.6214 | 0.8632 | 0.6691 | 0.1988 |
+| plantvillage | Gated GLoCA | 99 | 0.6578 | 0.8863 | 0.6909 | 0.1928 |
+| plantvillage | Gated GLoCA | 123 | 0.5768 | 0.8503 | 0.6248 | 0.1910 |
 
 All deltas below use native metric units.
 
@@ -362,23 +358,23 @@ All deltas below use native metric units.
 
 The CLS and gated references reuse the corresponding main CDC runs.
 
-| Dataset | Variant | Seed | Label categories | Reported clusters | ARI | NMI | ACC | Silhouette |
-|---|---|---|---|---|---|---|---|---|
-| plantseg | CLS reference | 42 | 114 | 114 | 0.3385 | 0.6838 | 0.4303 | 0.0667 |
-| plantseg | CLS reference | 67 | 114 | 114 | 0.3560 | 0.6851 | 0.4473 | 0.0636 |
-| plantseg | CLS reference | 69 | 114 | 114 | 0.3379 | 0.6891 | 0.4406 | 0.0689 |
-| plantseg | Gated GLoCA reference | 42 | 114 | 114 | 0.4333 | 0.7266 | 0.5124 | 0.1122 |
-| plantseg | Gated GLoCA reference | 67 | 114 | 114 | 0.3769 | 0.6912 | 0.4663 | 0.1048 |
-| plantseg | Gated GLoCA reference | 69 | 114 | 114 | 0.3994 | 0.7188 | 0.4873 | 0.1076 |
-| plantseg | Mean-pool GLoCA | 42 | 114 | 114 | 0.3621 | 0.6917 | 0.4530 | 0.0964 |
-| plantseg | Mean-pool GLoCA | 67 | 115 | 115 | 0.3605 | 0.6932 | 0.4566 | 0.1009 |
-| plantseg | Mean-pool GLoCA | 69 | 115 | 115 | 0.3644 | 0.6928 | 0.4568 | 0.1016 |
-| plantseg | No-CLS-residual GLoCA | 42 | 114 | 114 | 0.4416 | 0.7308 | 0.5227 | 0.1664 |
-| plantseg | No-CLS-residual GLoCA | 67 | 115 | 115 | 0.3971 | 0.7172 | 0.4849 | 0.1603 |
-| plantseg | No-CLS-residual GLoCA | 69 | 115 | 115 | 0.4147 | 0.7174 | 0.5025 | 0.1679 |
-| plantseg | No-patches GLoCA | 42 | 114 | 114 | 0.4006 | 0.7019 | 0.4842 | 0.0966 |
-| plantseg | No-patches GLoCA | 67 | 115 | 115 | 0.3800 | 0.7063 | 0.4773 | 0.0959 |
-| plantseg | No-patches GLoCA | 69 | 115 | 115 | 0.3648 | 0.6969 | 0.4640 | 0.0997 |
+| Dataset | Variant | Seed | ARI | NMI | ACC | Silhouette |
+|---|---|---|---|---|---|---|
+| plantseg | CLS reference | 42 | 0.3385 | 0.6838 | 0.4303 | 0.0667 |
+| plantseg | CLS reference | 67 | 0.3560 | 0.6851 | 0.4473 | 0.0636 |
+| plantseg | CLS reference | 69 | 0.3379 | 0.6891 | 0.4406 | 0.0689 |
+| plantseg | Gated GLoCA reference | 42 | 0.4333 | 0.7266 | 0.5124 | 0.1122 |
+| plantseg | Gated GLoCA reference | 67 | 0.3769 | 0.6912 | 0.4663 | 0.1048 |
+| plantseg | Gated GLoCA reference | 69 | 0.3994 | 0.7188 | 0.4873 | 0.1076 |
+| plantseg | Mean-pool GLoCA | 42 | 0.3621 | 0.6917 | 0.4530 | 0.0964 |
+| plantseg | Mean-pool GLoCA | 67 | 0.3605 | 0.6932 | 0.4566 | 0.1009 |
+| plantseg | Mean-pool GLoCA | 69 | 0.3644 | 0.6928 | 0.4568 | 0.1016 |
+| plantseg | No-CLS-residual GLoCA | 42 | 0.4416 | 0.7308 | 0.5227 | 0.1664 |
+| plantseg | No-CLS-residual GLoCA | 67 | 0.3971 | 0.7172 | 0.4849 | 0.1603 |
+| plantseg | No-CLS-residual GLoCA | 69 | 0.4147 | 0.7174 | 0.5025 | 0.1679 |
+| plantseg | No-patches GLoCA | 42 | 0.4006 | 0.7019 | 0.4842 | 0.0966 |
+| plantseg | No-patches GLoCA | 67 | 0.3800 | 0.7063 | 0.4773 | 0.0959 |
+| plantseg | No-patches GLoCA | 69 | 0.3648 | 0.6969 | 0.4640 | 0.0997 |
 
 | Variant | Seed | Nonempty clusters | ECE | MCE | Reliable ratio | Selected count |
 |---|---|---|---|---|---|---|

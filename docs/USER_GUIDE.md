@@ -193,7 +193,7 @@ outputs/main_experiments/gloca_gated/cdc/<dataset>/seed_42/
   checkpoints/latest.ckpt
 ```
 
-These artifacts are not bundled with the repository. The app currently validates historical head sizes of 114 for PlantSeg and 38 for PlantVillage. A new `n_clusters: auto` PlantSeg run on the reference 115-category snapshot is not a drop-in replacement for the app's historical checkpoint. Keep the checkpoint, config, embeddings, and assignments from the same supported run together; an arbitrary new training output is not automatically supported.
+These artifacts are not bundled with the repository. Keep the checkpoint, config, embeddings, and assignments from the same supported run together; an arbitrary new training output is not automatically supported.
 
 If the app reports a config or head-size mismatch, the supplied bundle is incompatible. Changing only the YAML output count does not establish compatibility with the checkpoint and saved embeddings.
 
