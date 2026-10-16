@@ -1,7 +1,9 @@
 # Reproducing GLoCA experiments
 
-Run commands from the repository root. The certified target is Windows x64,
-the pinned Python/PyTorch/CUDA stack, and the same hardware and NVIDIA driver.
+Run commands from the repository root in the `gloca-repro` environment. See the
+[user guide](USER_GUIDE.md) for dataset preparation and method selection. The
+supported reproduction target is Windows x64, the pinned Python/PyTorch/CUDA
+stack, and the same hardware and NVIDIA driver.
 Deterministic execution does not promise identical results on other platforms or
 GPU generations. Strict runs fail when an operation has no deterministic implementation.
 
@@ -11,10 +13,9 @@ GPU generations. Strict runs fail when an operation has no deterministic impleme
 conda env create -f environment.windows.yml
 conda activate gloca-repro
 python -m pip check
-python -m pytest -q
 ```
 
-The environment pins the Conda builds from XDC. `requirements-windows.lock.txt`
+The environment pins Conda builds and Python dependencies. `requirements-windows.lock.txt`
 pins the Windows CPython 3.12 wheels, including their SHA-256 hashes and the CUDA
 13.2 wheel index. A compatible NVIDIA driver must already be installed. The first
 backbone load downloads the pinned DINOv2 revision. Configuration and weight-file
@@ -25,13 +26,10 @@ Keep the dataset and backbone cache unchanged during an invocation. For a reposi
 $env:HF_HOME = "$PWD/.cache/huggingface"
 ```
 
-Obtain PlantVillage and PlantSeg from the sources documented in `dataset.txt`.
-Use class folders under `data/raw/plantvillage` and `data/raw/plantseg_folder`.
-The existing PlantSeg conversion utility is:
+## Verify your inputs
 
-```powershell
-python scripts/prepare_plantseg_folder_dataset.py --source-root <raw_plantseg_root>
-```
+Obtain and arrange the datasets using [dataset preparation](USER_GUIDE.md#prepare-the-datasets).
+Use class folders under `data/raw/plantvillage` and `data/raw/plantseg_folder`.
 
 The checked-in manifests contain relative paths, class labels, and image-byte
 hashes for 54,305 PlantVillage and 11,458 PlantSeg images. Main recipes verify these
@@ -52,18 +50,20 @@ heads to avoid repeatedly hashing the same images.
 
 ## Seeds and baseline sweeps
 
-Only seed-42 variants are retained. Adjacent YAML comments document the other
-seeds previously used for each recipe. Override the seed explicitly:
+Recipes default to seed 42. Adjacent YAML comments document other seeds used
+for each recipe. Override the seed explicitly:
 
 ```powershell
 python scripts/run_cdc.py configs/cdc/cdc_plantseg_cls_seed42.yaml --seed 67
 python scripts/run_cdc.py configs/cdc/cdc_plantseg_gloca_gated_seed42.yaml --seed 67
 python scripts/run_propos.py configs/propos/propos_plantseg_cls_full_seed42.yaml --seed 69
 python scripts/run_propos.py configs/propos/propos_plantseg_gloca_gated_full_seed42.yaml --seed 69
-python scripts/run_propos_gloca_diagnostics.py configs/diagnostics/propos_gloca_diagnostics_plantwild_seed42.yaml --seed 67
 ```
 
-`--seed N` replaces the YAML seed, including every diagnostic run after merging.
+`--seed N` replaces the YAML seed. The optional
+`scripts/run_propos_gloca_diagnostics.py` utility also accepts this flag and applies
+it to every diagnostic run after merging; its checked-in recipe uses PlantWild
+and is not a main-result recipe.
 The original YAML remains unchanged. Seeds must be integers from 0 to 4294967295.
 The effective seed appears in paths, saved config, assignments, metrics, and
 checkpoint identity; the command is recorded in provenance. Experiment settings
@@ -142,22 +142,17 @@ repeat, change only the output root; compare tensors, assignments, and scientifi
 metrics, excluding timing/resource fields and serialization bytes. Repeating an
 unchanged baseline command should verify and skip completed runs.
 
-## Validation performed
+## Troubleshooting
 
-On 2026-10-16, all 161 tests passed from an empty project copy using the rebuilt
-Windows environment. Coverage includes exact interrupted-versus-uninterrupted
-training for CDC/ProPos with and without GLoCA, DEC, IDEC, and MLP; a full Windows
-multiworker CDC/GLoCA resume comparison; seed overrides; content verification;
-completion checks; and canonical output compatibility.
+| Symptom | What to check |
+|---|---|
+| Environment creation fails on another operating system | The lock targets Windows x64 / CPython 3.12; it does not specify a supported cross-platform environment. |
+| Dataset manifest mismatch | Check the image export, class folders, and selected subset. Image re-encoding changes hashes. Keep the reference manifest intact; use a separate manifest for an intentional custom dataset. |
+| Incompatible or missing provenance in an output directory | Choose a fresh `experiment.output_dir`. For baseline sweeps, use the top-level `experiment.output_dir`, outside `base_config`. Historical directories cannot be treated as verified strict runs. |
+| Resume rejects a checkpoint | Keep the original seed, full schedule, scientific settings, input bytes, source, and runtime identity. Use `checkpoints/latest.ckpt` or another periodic checkpoint from that run. |
+| PyTorch reports a nondeterministic operation | Strict mode intentionally stops. Check the pinned environment and operation rather than silently relaxing determinism for a claimed reproduction. |
+| Scores differ from the experiment report | The report contains historical runs. Current strict execution changes RNG consumption; its guarantees apply to matched new runs, not retroactive recovery of historical numbers. |
+| A baseline run is skipped | Its saved identity and completion hashes were verified. Use a fresh output root for an independent repeat. |
 
-Real DINOv2 CUDA smoke runs on an NVIDIA GeForce RTX 4070 Laptop GPU verified:
-
-- 18 baseline fresh-repeat pairs across seeds 42 and 67, with identical scientific outputs.
-- Nine baseline restored/fresh comparisons and 18 validated skips.
-- Four live-image fresh-repeat pairs and four restored/fresh comparisons, covering
-  CDC/ProPos with CLS and GLoCA, with identical tensors, assignments, and scientific metrics.
-- All five ProPos/GLoCA diagnostic variants with the CLI seed override.
-
-All 72 locked wheels passed download/hash verification, and `pip check` passed in
-the rebuilt environment. These checks use short debug schedules and small image
-subsets; full research-length experiments were not rerun.
+For an installation check, run `python -m pip check`. To exercise the repository's
+automated checks, run `python -m pytest -q`; this does not replace a full experiment.

@@ -1,2 +1,0 @@
-Dataset 1: PlantVillage - Download link: https://huggingface.co/datasets/mohanty/PlantVillage
-Dataset 2: PlantSeg - Download link: https://zenodo.org/records/14935094
